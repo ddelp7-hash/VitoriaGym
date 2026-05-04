@@ -1,21 +1,25 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Trophy, 
-  Store, 
   Settings, 
   CheckCircle, 
   Coins, 
-  Dumbbell,
-  AlertCircle,
-  ChevronRight,
-  Loader2
+  Dumbbell, 
+  AlertCircle, 
+  ChevronRight, 
+  Loader2, 
+  Plus, 
+  ShoppingBag,
+  Zap,
+  LogOut,
+  Trash2
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
   signInAnonymously, 
-  onAuthStateChanged, 
-  signInWithCustomToken 
+  signInWithCustomToken, 
+  onAuthStateChanged 
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -24,8 +28,9 @@ import {
   setDoc, 
   onSnapshot, 
   addDoc, 
-  updateDoc,
-  getDoc
+  updateDoc, 
+  getDoc,
+  deleteDoc
 } from 'firebase/firestore';
 
 // --- CONFIGURAÇÃO FIREBASE ---
@@ -35,25 +40,25 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'vitoria-gym-final-v2';
 
-const App = () => {
+export default function App() {
   const [user, setUser] = useState(null);
   const [points, setPoints] = useState(0);
-  const [view, setView] = useState('loja');
+  const [view, setView] = useState('home'); // 'home', 'loja', 'admin'
   const [shopItems, setShopItems] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  
-  // Admin State
   const [isAdmin, setIsAdmin] = useState(false);
-  const [passInput, setPassInput] = useState('');
+  
+  // Estados para formulários Admin
   const [newItem, setNewItem] = useState({ name: '', price: '', img: '' });
   const [newTask, setNewTask] = useState({ title: '', points: '' });
+  const [adminPass, setAdminPass] = useState('');
 
-  // 1. AUTENTICAÇÃO (REGRA OBRIGATÓRIA)
+  // 1. AUTENTICAÇÃO (REGRAS OBRIGATÓRIAS)
   useEffect(() => {
-    const handleAuth = async () => {
+    const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
@@ -61,48 +66,48 @@ const App = () => {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("Erro Crítico de Auth:", err);
-        setError("Erro na ligação ao servidor de segurança.");
+        console.error("Erro na autenticação:", err);
+        setError("Falha ao ligar ao servidor de segurança.");
       }
     };
-
-    handleAuth();
+    initAuth();
     const unsubscribe = onAuthStateChanged(auth, (u) => {
-      if (u) setUser(u);
+      setUser(u);
     });
     return () => unsubscribe();
   }, []);
 
-  // 2. SINCRONIZAÇÃO DE DADOS (ESTRUTURA DE CAMINHO RÍGIDA)
+  // 2. SINCRONIZAÇÃO DE DADOS (FIRESTORE)
   useEffect(() => {
     if (!user) return;
 
-    // Caminho para pontos do utilizador (Estrutura Obrigatória /artifacts/ID/users/UID/COL)
-    const userStatsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'stats', 'current');
+    // Caminhos Públicos
+    const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shop_items');
+    const tasksCol = collection(db, 'artifacts', appId, 'public', 'data', 'gym_tasks');
     
+    // Caminho Privado (Pontos do Utilizador)
+    const userStatsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'stats', 'current');
+
+    // Listener de Pontos
     const unsubStats = onSnapshot(userStatsRef, (snap) => {
       if (snap.exists()) {
         setPoints(snap.data().points || 0);
       } else {
-        // Inicialização segura
+        // Inicializar se não existir
         setDoc(userStatsRef, { points: 0, uid: user.uid, updatedAt: Date.now() });
       }
       setLoading(false);
     }, (err) => {
       console.error("Erro Firestore Pontos:", err);
-      // Fallback: Se falhar permissão de leitura, mantemos o loading mas mostramos erro amigável
-      setError("Permissão de acesso negada. Contacte o administrador.");
     });
 
-    // Caminhos Públicos
-    const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shop_items');
-    const tasksCol = collection(db, 'artifacts', appId, 'public', 'data', 'gym_tasks');
-
+    // Listener de Itens da Loja
     const unsubShop = onSnapshot(shopCol, (snap) => {
       const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setShopItems(items);
     }, (err) => console.error("Erro Loja:", err));
 
+    // Listener de Tarefas
     const unsubTasks = onSnapshot(tasksCol, (snap) => {
       const tks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setTasks(tks);
@@ -124,7 +129,10 @@ const App = () => {
     try {
       const docSnap = await getDoc(userStatsRef);
       const currentPoints = docSnap.exists() ? docSnap.data().points : 0;
-      await setDoc(userStatsRef, { points: currentPoints + Number(taskPoints) }, { merge: true });
+      await updateDoc(userStatsRef, { 
+        points: currentPoints + Number(taskPoints),
+        updatedAt: Date.now()
+      });
     } catch (e) {
       console.error("Erro ao resgatar:", e);
     } finally {
@@ -138,7 +146,12 @@ const App = () => {
     const userStatsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'stats', 'current');
     
     try {
-      await updateDoc(userStatsRef, { points: points - item.price });
+      await updateDoc(userStatsRef, { 
+        points: points - item.price,
+        updatedAt: Date.now()
+      });
+      // Aqui poderias adicionar o item a uma coleção de 'compras' do utilizador
+      alert(`Sucesso! Mostra este ecrã na receção para levantar: ${item.name}`);
     } catch (e) {
       console.error("Erro ao comprar:", e);
     } finally {
@@ -147,6 +160,15 @@ const App = () => {
   };
 
   // AÇÕES ADMIN
+  const handleVerifyAdmin = () => {
+    if (adminPass === "1234") {
+      setIsAdmin(true);
+      setError(null);
+    } else {
+      alert("PIN Incorreto!");
+    }
+  };
+
   const handleAddShop = async () => {
     if (!newItem.name || !newItem.price) return;
     try {
@@ -170,218 +192,260 @@ const App = () => {
     } catch (e) { console.error(e); }
   };
 
-  if (error) {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-8 text-center">
-        <AlertCircle className="w-16 h-16 text-red-500 mb-4" />
-        <h2 className="text-xl font-bold text-white mb-2">Erro de Acesso</h2>
-        <p className="text-zinc-400 text-sm mb-6 max-w-xs">{error}</p>
-        <button 
-          onClick={() => window.location.reload()} 
-          className="bg-orange-500 text-black font-black px-8 py-3 rounded-full uppercase italic hover:bg-orange-400 transition-colors"
-        >
-          Reiniciar App
-        </button>
-      </div>
-    );
-  }
+  const deleteTask = async (id) => {
+    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gym_tasks', id));
+  };
 
-  if (loading) {
+  if (loading && !error) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center">
-        <div className="relative">
-          <Dumbbell className="w-16 h-16 text-orange-500 animate-bounce mb-4" />
-          <div className="absolute inset-0 blur-2xl bg-orange-500/20 animate-pulse" />
-        </div>
-        <p className="text-orange-500 font-black italic tracking-widest uppercase animate-pulse">A carregar Vitoria Gym...</p>
+      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white">
+        <Loader2 className="w-12 h-12 text-orange-500 animate-spin mb-4" />
+        <p className="font-bold tracking-widest uppercase text-xs">Vitoria Gym a carregar...</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-black text-white font-sans selection:bg-orange-500 selection:text-black">
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans pb-24">
       {/* HEADER */}
-      <header className="sticky top-0 z-50 bg-black/80 backdrop-blur-xl border-b border-white/5 p-5 flex justify-between items-center">
-        <div className="flex items-center gap-3">
-          <div className="bg-orange-500 p-2 rounded-xl shadow-[0_0_20px_rgba(249,115,22,0.3)]">
-            <Dumbbell className="w-5 h-5 text-black" />
-          </div>
-          <span className="font-black italic text-2xl uppercase tracking-tighter">Vitoria<span className="text-orange-500 text-3xl">.</span>Gym</span>
+      <header className="p-6 flex justify-between items-center bg-zinc-900/50 sticky top-0 z-40 backdrop-blur-md border-b border-zinc-800">
+        <div>
+          <h1 className="text-2xl font-black italic uppercase tracking-tighter leading-none">
+            Vitoria<span className="text-orange-500">GYM</span>
+          </h1>
+          <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-[0.2em]">Loyalty Rewards</p>
         </div>
-        <div className="bg-zinc-900/80 border border-white/10 px-5 py-2.5 rounded-2xl flex items-center gap-3">
-          <div className="bg-orange-500/10 p-1 rounded-md">
-            <Coins className="w-4 h-4 text-orange-500" />
-          </div>
-          <span className="font-black text-lg tracking-tight">{points} <span className="text-[10px] text-zinc-500 uppercase tracking-widest">PTS</span></span>
+        <div className="flex items-center gap-2 bg-zinc-800 px-4 py-2 rounded-full border border-zinc-700 shadow-lg">
+          <Zap className="w-4 h-4 text-orange-500 fill-orange-500" />
+          <span className="font-black text-sm">{points} <span className="text-[10px] text-zinc-400">PTS</span></span>
         </div>
       </header>
 
-      {/* CONTEÚDO */}
-      <main className="max-w-md mx-auto p-6 pb-36">
-        {isProcessing && (
-          <div className="fixed inset-x-0 top-24 flex justify-center z-50 pointer-events-none">
-            <div className="bg-orange-500 text-black px-4 py-1.5 rounded-full text-[10px] font-black uppercase flex items-center gap-2 shadow-lg animate-fade-in">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Sincronizando...
-            </div>
+      <main className="p-6 max-w-md mx-auto">
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-xl flex items-center gap-3 mb-6">
+            <AlertCircle className="text-red-500" />
+            <p className="text-xs text-red-200">{error}</p>
           </div>
         )}
 
-        {view === 'loja' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col gap-1">
-              <h1 className="text-5xl font-black italic uppercase tracking-tighter leading-none">Loja <span className="text-orange-500">VIP</span></h1>
-              <p className="text-zinc-500 text-[10px] uppercase font-bold tracking-[0.3em]">Transforma o teu suor em prémios</p>
-            </div>
-            
-            <div className="grid gap-6">
-              {shopItems.length === 0 && (
-                <div className="py-20 text-center border-2 border-dashed border-zinc-900 rounded-[3rem]">
-                  <Store className="w-12 h-12 text-zinc-800 mx-auto mb-4" />
-                  <p className="text-zinc-600 font-bold uppercase text-xs">Aguardando novos stock...</p>
+        {/* VIEW: HOME / MISSÕES */}
+        {view === 'home' && (
+          <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="relative overflow-hidden bg-gradient-to-br from-orange-500 to-red-600 p-6 rounded-[2rem] shadow-xl shadow-orange-500/20">
+              <div className="relative z-10">
+                <p className="text-orange-100 text-[10px] font-bold uppercase mb-1">Status Atleta</p>
+                <h2 className="text-2xl font-black uppercase italic leading-none mb-4">Mestre do Ferro</h2>
+                <div className="h-2 bg-black/20 rounded-full mb-2 overflow-hidden">
+                  <div className="h-full bg-white transition-all" style={{ width: `${Math.min((points/2000)*100, 100)}%` }}></div>
                 </div>
-              )}
-              {shopItems.map(item => (
-                <div key={item.id} className="bg-zinc-900/30 rounded-[2.5rem] border border-white/5 p-5 flex gap-5 hover:bg-zinc-900/60 transition-all active:scale-[0.98]">
-                  <div className="relative shrink-0">
-                    <img src={item.img} className="w-28 h-28 rounded-3xl object-cover grayscale contrast-125" alt={item.name} />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent rounded-3xl" />
-                  </div>
-                  <div className="flex flex-col justify-between py-1 flex-1">
-                    <div>
-                      <h3 className="font-black uppercase text-sm tracking-tight leading-tight mb-1">{item.name}</h3>
-                      <div className="flex items-center gap-1.5">
-                        <Coins className="w-3 h-3 text-orange-500" />
-                        <p className="text-orange-500 font-black text-base">{item.price}</p>
+                <p className="text-white/80 text-[11px]">Faltam {Math.max(2000 - points, 0)} pts para o nível ELITE.</p>
+              </div>
+              <Dumbbell className="absolute -right-4 -bottom-4 w-32 h-32 text-white/10 -rotate-12" />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <h3 className="font-black uppercase italic text-zinc-400 text-sm tracking-widest flex items-center gap-2">
+                <Trophy className="w-4 h-4 text-orange-500" /> Missões de Hoje
+              </h3>
+            </div>
+
+            <div className="grid gap-3">
+              {tasks.length === 0 ? (
+                <p className="text-center py-10 text-zinc-600 text-sm italic">Nenhuma missão disponível...</p>
+              ) : (
+                tasks.map(task => (
+                  <div key={task.id} className="bg-zinc-900 border border-zinc-800 p-4 rounded-2xl flex items-center justify-between group">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 bg-zinc-800 rounded-xl flex items-center justify-center text-orange-500 group-hover:scale-110 transition-transform">
+                        <Zap size={20} />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-sm">{task.title}</h4>
+                        <p className="text-orange-500 text-[10px] font-black uppercase">+{task.points} Pontos</p>
                       </div>
                     </div>
                     <button 
-                      onClick={() => buyItem(item)}
-                      disabled={points < item.price || isProcessing}
-                      className="w-full bg-white text-black py-3 rounded-2xl text-[10px] font-black uppercase hover:bg-orange-500 transition-all disabled:opacity-20 disabled:grayscale"
+                      onClick={() => claimTask(task.points)}
+                      disabled={isProcessing}
+                      className="bg-white text-black font-black text-[10px] px-4 py-2 rounded-lg uppercase active:scale-95 disabled:opacity-50 transition-all"
                     >
-                      {points < item.price ? 'Pontos Insuficientes' : 'Resgatar Produto'}
+                      Resgatar
                     </button>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
-          </div>
+          </section>
         )}
 
-        {view === 'metas' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col gap-1">
-              <h1 className="text-5xl font-black italic uppercase tracking-tighter leading-none">Daily <span className="text-orange-500">Task</span></h1>
-              <p className="text-zinc-500 text-[10px] uppercase font-bold tracking-[0.3em]">O esforço nunca é em vão</p>
+        {/* VIEW: LOJA */}
+        {view === 'loja' && (
+          <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col gap-1 mb-2">
+              <h2 className="text-3xl font-black italic uppercase leading-none">Loja <span className="text-orange-500">VIP</span></h2>
+              <p className="text-zinc-500 text-xs font-medium">Troca o teu suor por suplementos e gear.</p>
             </div>
 
-            <div className="grid gap-4">
-              {tasks.map(task => (
-                <button 
-                  key={task.id}
-                  onClick={() => claimTask(task.points)}
-                  disabled={isProcessing}
-                  className="bg-zinc-900/30 border border-white/5 p-6 rounded-[2rem] flex items-center justify-between group active:scale-95 transition-all hover:bg-orange-500/5 hover:border-orange-500/30"
-                >
-                  <div className="flex items-center gap-5">
-                    <div className="w-14 h-14 rounded-2xl bg-zinc-900 flex items-center justify-center group-hover:bg-orange-500 group-hover:text-black transition-all text-zinc-600 shadow-inner">
-                      <CheckCircle className="w-7 h-7" />
-                    </div>
-                    <div className="text-left">
-                      <h3 className="font-black uppercase text-xs mb-1 tracking-tight">{task.title}</h3>
-                      <div className="flex items-center gap-2 bg-orange-500/10 w-fit px-3 py-1 rounded-full">
-                        <span className="text-[10px] text-orange-500 font-black tracking-widest uppercase">+{task.points} PTS</span>
-                      </div>
+            <div className="grid grid-cols-2 gap-4">
+              {shopItems.map(item => (
+                <div key={item.id} className="bg-zinc-900 border border-zinc-800 rounded-3xl p-3 flex flex-col gap-3">
+                  <div className="aspect-square bg-zinc-800 rounded-2xl overflow-hidden relative group">
+                    <img src={item.img} alt={item.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                    <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-1 rounded-lg flex items-center gap-1">
+                      <Zap className="w-3 h-3 text-orange-500" />
+                      <span className="text-[10px] font-bold text-white">{item.price}</span>
                     </div>
                   </div>
-                  <ChevronRight className="w-5 h-5 text-zinc-800 group-hover:text-orange-500 translate-x-0 group-hover:translate-x-1 transition-all" />
-                </button>
+                  <div>
+                    <h4 className="font-bold text-xs truncate uppercase tracking-tight">{item.name}</h4>
+                  </div>
+                  <button 
+                    onClick={() => buyItem(item)}
+                    disabled={points < item.price || isProcessing}
+                    className={`w-full py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                      points >= item.price 
+                        ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20' 
+                        : 'bg-zinc-800 text-zinc-500 border border-zinc-700'
+                    }`}
+                  >
+                    {points >= item.price ? 'Trocar Agora' : 'Bloqueado'}
+                  </button>
+                </div>
               ))}
             </div>
-          </div>
+          </section>
         )}
 
+        {/* VIEW: ADMIN */}
         {view === 'admin' && (
-          <div className="space-y-6">
+          <section className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {!isAdmin ? (
-              <div className="bg-zinc-900/30 p-12 rounded-[3.5rem] text-center border border-white/5 mt-10">
-                <div className="w-20 h-20 bg-zinc-900 rounded-full flex items-center justify-center mx-auto mb-8 border border-white/5 shadow-2xl">
-                  <Settings className="w-10 h-10 text-zinc-700" />
+              <div className="py-12 flex flex-col items-center">
+                <div className="w-20 h-20 bg-zinc-900 rounded-3xl flex items-center justify-center mb-6 border border-zinc-800">
+                  <Settings className="w-10 h-10 text-orange-500" />
                 </div>
-                <h2 className="font-black uppercase text-xs mb-8 tracking-[0.3em] text-zinc-400">Administração</h2>
+                <h3 className="font-black uppercase mb-4 tracking-widest text-sm">Acesso Staff</h3>
                 <input 
                   type="password" 
-                  value={passInput}
-                  onChange={e => setPassInput(e.target.value)}
-                  className="w-full bg-black border border-white/10 p-5 rounded-3xl mb-4 text-center font-black tracking-[0.5em] focus:border-orange-500 outline-none transition-all"
-                  placeholder="••••••"
+                  placeholder="PIN DE ACESSO" 
+                  value={adminPass}
+                  onChange={(e) => setAdminPass(e.target.value)}
+                  className="w-full max-w-[200px] bg-zinc-900 border border-zinc-800 p-4 rounded-2xl text-center font-black tracking-[0.5em] focus:border-orange-500 outline-none transition-all mb-4"
                 />
                 <button 
-                  onClick={() => passInput === 'vitoria' && setIsAdmin(true)}
-                  className="w-full bg-orange-500 text-black py-5 rounded-3xl font-black uppercase tracking-tighter shadow-[0_0_30px_rgba(249,115,22,0.2)] hover:scale-[1.02] active:scale-95 transition-all"
+                  onClick={handleVerifyAdmin}
+                  className="w-full max-w-[200px] bg-white text-black font-black py-4 rounded-2xl uppercase text-xs tracking-widest"
                 >
-                  Entrar no Sistema
+                  Entrar
                 </button>
+                <p className="mt-4 text-[10px] text-zinc-600 font-bold italic">PIN Padrão: 1234</p>
               </div>
             ) : (
-              <div className="space-y-8 animate-in zoom-in-95 duration-300">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-3xl font-black uppercase italic text-orange-500">Controlo Staff</h2>
-                  <button onClick={() => setIsAdmin(false)} className="text-[10px] font-black uppercase text-zinc-600 bg-zinc-900 px-4 py-2 rounded-full">Sair</button>
+              <div className="space-y-8 pb-10">
+                <div className="flex items-center justify-between bg-zinc-900 p-4 rounded-2xl border border-zinc-800">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center text-white">
+                      <Settings size={20} />
+                    </div>
+                    <span className="font-black text-xs uppercase tracking-widest">Painel Gestão</span>
+                  </div>
+                  <button onClick={() => setIsAdmin(false)} className="text-zinc-500"><LogOut size={18} /></button>
                 </div>
-                
-                <div className="space-y-6">
-                  <div className="bg-zinc-900/50 p-8 rounded-[2.5rem] space-y-5 border border-white/5">
-                    <h3 className="font-black text-[10px] uppercase text-orange-500 tracking-[0.2em] ml-2">Novo Stock Loja</h3>
-                    <div className="space-y-3">
-                      <input placeholder="Nome do Artigo" className="w-full bg-black/50 p-5 rounded-2xl text-sm border border-white/5 focus:border-orange-500 outline-none" value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})} />
-                      <input placeholder="Preço (PTS)" type="number" className="w-full bg-black/50 p-5 rounded-2xl text-sm border border-white/5 focus:border-orange-500 outline-none" value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})} />
-                      <input placeholder="URL da Imagem (Opcional)" className="w-full bg-black/50 p-5 rounded-2xl text-sm border border-white/5 focus:border-orange-500 outline-none" value={newItem.img} onChange={e => setNewItem({...newItem, img: e.target.value})} />
-                    </div>
-                    <button onClick={handleAddShop} className="w-full bg-white text-black py-5 rounded-2xl font-black text-xs uppercase hover:bg-orange-500 transition-all active:scale-95">Adicionar à Montra</button>
-                  </div>
 
-                  <div className="bg-zinc-900/50 p-8 rounded-[2.5rem] space-y-5 border border-white/5">
-                    <h3 className="font-black text-[10px] uppercase text-orange-500 tracking-[0.2em] ml-2">Nova Missão</h3>
-                    <div className="space-y-3">
-                      <input placeholder="Objetivo (ex: Treino de Ombros)" className="w-full bg-black/50 p-5 rounded-2xl text-sm border border-white/5 focus:border-orange-500 outline-none" value={newTask.title} onChange={e => setNewTask({...newTask, title: e.target.value})} />
-                      <input placeholder="Valor Recompensa" type="number" className="w-full bg-black/50 p-5 rounded-2xl text-sm border border-white/5 focus:border-orange-500 outline-none" value={newTask.points} onChange={e => setNewTask({...newTask, points: e.target.value})} />
-                    </div>
-                    <button onClick={handleAddTask} className="w-full bg-orange-500 text-black py-5 rounded-2xl font-black text-xs uppercase hover:bg-orange-400 transition-all active:scale-95">Publicar Meta</button>
-                  </div>
+                {/* ADICIONAR MISSÃO */}
+                <div className="bg-zinc-900 p-6 rounded-3xl border border-zinc-800 space-y-4">
+                  <h4 className="text-xs font-black uppercase tracking-widest text-orange-500 flex items-center gap-2">
+                    <Plus size={14} /> Nova Missão
+                  </h4>
+                  <input 
+                    type="text" placeholder="Nome (Ex: Pernas d'Aço)" 
+                    value={newTask.title} onChange={e => setNewTask({...newTask, title: e.target.value})}
+                    className="w-full bg-zinc-800 border-none p-4 rounded-xl text-sm focus:ring-1 ring-orange-500 outline-none"
+                  />
+                  <input 
+                    type="number" placeholder="Pontos (Ex: 50)" 
+                    value={newTask.points} onChange={e => setNewTask({...newTask, points: e.target.value})}
+                    className="w-full bg-zinc-800 border-none p-4 rounded-xl text-sm outline-none"
+                  />
+                  <button onClick={handleAddTask} className="w-full bg-white text-black font-black py-3 rounded-xl uppercase text-xs">Criar Missão</button>
+                </div>
+
+                {/* LISTA DE MISSÕES PARA ELIMINAR */}
+                <div className="space-y-2">
+                   <h4 className="text-[10px] font-black uppercase text-zinc-500 tracking-widest px-2">Gerir Atuais</h4>
+                   {tasks.map(t => (
+                     <div key={t.id} className="bg-zinc-900/50 p-3 rounded-xl flex justify-between items-center border border-zinc-800">
+                        <span className="text-xs font-bold">{t.title}</span>
+                        <button onClick={() => deleteTask(t.id)} className="text-red-500 p-2"><Trash2 size={14} /></button>
+                     </div>
+                   ))}
+                </div>
+
+                {/* ADICIONAR LOJA */}
+                <div className="bg-zinc-900 p-6 rounded-3xl border border-zinc-800 space-y-4">
+                  <h4 className="text-xs font-black uppercase tracking-widest text-orange-500 flex items-center gap-2">
+                    <Plus size={14} /> Novo Produto
+                  </h4>
+                  <input 
+                    type="text" placeholder="Nome Produto" 
+                    value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})}
+                    className="w-full bg-zinc-800 border-none p-4 rounded-xl text-sm outline-none"
+                  />
+                  <input 
+                    type="number" placeholder="Preço em PTS" 
+                    value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})}
+                    className="w-full bg-zinc-800 border-none p-4 rounded-xl text-sm outline-none"
+                  />
+                  <input 
+                    type="text" placeholder="URL da Imagem (opcional)" 
+                    value={newItem.img} onChange={e => setNewItem({...newItem, img: e.target.value})}
+                    className="w-full bg-zinc-800 border-none p-4 rounded-xl text-sm outline-none"
+                  />
+                  <button onClick={handleAddShop} className="w-full bg-white text-black font-black py-3 rounded-xl uppercase text-xs">Adicionar Stock</button>
                 </div>
               </div>
             )}
-          </div>
+          </section>
         )}
       </main>
 
       {/* NAV BAR */}
-      <nav className="fixed bottom-6 left-6 right-6 h-20 bg-zinc-900/90 backdrop-blur-2xl rounded-[2.5rem] border border-white/10 px-10 flex justify-between items-center z-50 shadow-2xl shadow-black">
-        <button onClick={() => setView('loja')} className={`flex flex-col items-center gap-1 transition-all ${view === 'loja' ? 'text-orange-500 scale-110' : 'text-zinc-600'}`}>
-          <Store className={`w-6 h-6 ${view === 'loja' ? 'fill-orange-500/20' : ''}`} />
-          <span className="text-[8px] font-black uppercase tracking-widest italic">Shop</span>
-        </button>
-        <button onClick={() => setView('metas')} className={`flex flex-col items-center gap-1 transition-all ${view === 'metas' ? 'text-orange-500 scale-110' : 'text-zinc-600'}`}>
-          <Trophy className={`w-6 h-6 ${view === 'metas' ? 'fill-orange-500/20' : ''}`} />
-          <span className="text-[8px] font-black uppercase tracking-widest italic">Goals</span>
-        </button>
-        <button onClick={() => setView('admin')} className={`flex flex-col items-center gap-1 transition-all ${view === 'admin' ? 'text-orange-500 scale-110' : 'text-zinc-600'}`}>
-          <Settings className={`w-6 h-6 ${view === 'admin' ? 'fill-orange-500/20' : ''}`} />
-          <span className="text-[8px] font-black uppercase tracking-widest italic">Staff</span>
-        </button>
+      <nav className="fixed bottom-6 left-6 right-6 z-50">
+        <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800/50 p-2 rounded-[2.5rem] flex justify-around items-center shadow-2xl">
+          <button 
+            onClick={() => setView('home')}
+            className={`p-4 rounded-full transition-all ${view === 'home' ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/40' : 'text-zinc-500'}`}
+          >
+            <Dumbbell size={20} strokeWidth={view === 'home' ? 3 : 2} />
+          </button>
+          <button 
+            onClick={() => setView('loja')}
+            className={`p-4 rounded-full transition-all ${view === 'loja' ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/40' : 'text-zinc-500'}`}
+          >
+            <ShoppingBag size={20} strokeWidth={view === 'loja' ? 3 : 2} />
+          </button>
+          <button 
+            onClick={() => setView('admin')}
+            className={`p-4 rounded-full transition-all ${view === 'admin' ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/40' : 'text-zinc-500'}`}
+          >
+            <Settings size={20} strokeWidth={view === 'admin' ? 3 : 2} />
+          </button>
+        </div>
       </nav>
 
-      <style dangerouslySetInnerHTML={{ __html: `
-        @keyframes fade-in {
-          from { opacity: 0; transform: translateY(-10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in { animation: fade-in 0.3s ease-out; }
-      `}} />
+      {/* INDICADOR DE PROCESSAMENTO */}
+      {isProcessing && (
+        <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center backdrop-blur-sm animate-in fade-in">
+          <div className="bg-zinc-900 p-8 rounded-[2rem] border border-zinc-800 flex flex-col items-center gap-4">
+             <div className="relative">
+                <Loader2 className="w-10 h-10 text-orange-500 animate-spin" />
+                <Zap className="absolute inset-0 m-auto w-4 h-4 text-orange-300" />
+             </div>
+             <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-400">Sincronizando...</p>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
-
-export default App;
+}
