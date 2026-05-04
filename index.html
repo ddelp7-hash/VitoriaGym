@@ -5,13 +5,12 @@ import {
   Settings, 
   Plus, 
   Trash2, 
-  User, 
   CheckCircle, 
-  XCircle, 
   Coins, 
-  ChevronRight,
   LogOut,
-  Camera
+  Camera,
+  Dumbbell,
+  Target
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
@@ -20,13 +19,10 @@ import {
   collection, 
   doc, 
   setDoc, 
-  getDoc, 
   onSnapshot, 
   addDoc, 
   updateDoc, 
-  deleteDoc, 
-  query, 
-  orderBy 
+  deleteDoc 
 } from 'firebase/firestore';
 
 // --- CONFIGURAÇÃO FIREBASE ---
@@ -34,44 +30,49 @@ const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'vitoria-rewards-system';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'vitoria-gym-rewards';
 
 const App = () => {
   const [user, setUser] = useState(null);
-  const [view, setView] = useState('loja'); // 'loja', 'admin', 'perfil'
+  const [view, setView] = useState('loja');
   const [points, setPoints] = useState(0);
   const [shopItems, setShopItems] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  // Estados para formulários Admin
   const [adminAuth, setAdminAuth] = useState(false);
   const [password, setPassword] = useState('');
   const [newItem, setNewItem] = useState({ name: '', price: '', imageUrl: '' });
   const [newTask, setNewTask] = useState({ title: '', points: '' });
 
-  // 1. Inicializar Auth
+  // 1. Inicializar Auth com Correção de Bug de Carregamento
   useEffect(() => {
     const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Erro na autenticação:", err);
       }
     };
+    
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      if (!u) setLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // 2. Buscar Dados do Firestore
+  // 2. Buscar Dados (Sincronizado com o User)
   useEffect(() => {
     if (!user) return;
 
-    // Pontos do usuário
+    // Referência do perfil do usuário
     const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
+    
     const unsubPoints = onSnapshot(userDocRef, (docSnap) => {
       if (docSnap.exists()) {
         setPoints(docSnap.data().points || 0);
@@ -79,21 +80,22 @@ const App = () => {
         setDoc(userDocRef, { points: 0 });
       }
       setLoading(false);
-    }, (err) => console.error("Erro pontos:", err));
+    }, (err) => {
+      console.error("Erro ao buscar pontos:", err);
+      setLoading(false);
+    });
 
-    // Itens da Loja (Público)
+    // Itens da Loja
     const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shopItems');
     const unsubShop = onSnapshot(shopCol, (snap) => {
-      const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setShopItems(items);
-    }, (err) => console.error("Erro loja:", err));
+      setShopItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
 
-    // Tarefas (Público)
+    // Tarefas/Missões
     const tasksCol = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
     const unsubTasks = onSnapshot(tasksCol, (snap) => {
-      const tks = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTasks(tks);
-    }, (err) => console.error("Erro tarefas:", err));
+      setTasks(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
 
     return () => {
       unsubPoints();
@@ -102,28 +104,27 @@ const App = () => {
     };
   }, [user]);
 
-  // Funções de Lógica
+  // Ações
   const handleCompleteTask = async (taskPoints) => {
+    if (!user) return;
     const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
     await updateDoc(userDocRef, { points: points + Number(taskPoints) });
   };
 
   const handleBuyItem = async (item) => {
-    if (points >= item.price) {
-      const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
-      await updateDoc(userDocRef, { points: points - item.price });
-      // Aqui você poderia adicionar um histórico de compras
-    }
+    if (!user || points < item.price) return;
+    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
+    await updateDoc(userDocRef, { points: points - item.price });
   };
 
-  // Funções Administrativas
+  // Admin Actions
   const addShopItem = async () => {
     if (!newItem.name || !newItem.price) return;
     const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shopItems');
     await addDoc(shopCol, { 
       name: newItem.name, 
       price: Number(newItem.price),
-      imageUrl: newItem.imageUrl || 'https://images.unsplash.com/photo-1544027993-37dbfe43562a?auto=format&fit=crop&q=80&w=400'
+      imageUrl: newItem.imageUrl || 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?q=80&w=400'
     });
     setNewItem({ name: '', price: '', imageUrl: '' });
   };
@@ -136,107 +137,108 @@ const App = () => {
   };
 
   const deleteItem = async (id, collectionName) => {
-    const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', collectionName, id);
-    await deleteDoc(itemDoc);
+    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', collectionName, id));
   };
 
   if (loading) return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
-      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-indigo-500"></div>
+    <div className="min-h-screen bg-black flex flex-col items-center justify-center text-orange-500">
+      <Dumbbell className="w-12 h-12 animate-bounce mb-4" />
+      <p className="font-bold tracking-widest animate-pulse">CARREGANDO TREINO...</p>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-24">
-      {/* Header Fixo */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+    <div className="min-h-screen bg-neutral-950 text-white font-sans pb-24 selection:bg-orange-500">
+      {/* Header Estilo Gym */}
+      <header className="bg-neutral-900 border-b border-neutral-800 sticky top-0 z-50 shadow-lg">
         <div className="max-w-md mx-auto px-6 py-4 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <div className="bg-indigo-100 p-2 rounded-lg">
-              <Trophy className="text-indigo-600 w-5 h-5" />
+            <div className="bg-orange-500 p-1.5 rounded rotate-3 shadow-[0_0_15px_rgba(249,115,22,0.4)]">
+              <Dumbbell className="text-black w-5 h-5" />
             </div>
-            <h1 className="font-bold text-lg tracking-tight">Vitória Rewards</h1>
+            <h1 className="font-black text-xl italic uppercase tracking-tighter">Vitoria<span className="text-orange-500">Gym</span></h1>
           </div>
-          <div className="flex items-center bg-amber-100 px-3 py-1.5 rounded-full gap-2 border border-amber-200">
-            <Coins className="text-amber-600 w-4 h-4" />
-            <span className="font-bold text-amber-700">{points}</span>
+          <div className="flex items-center bg-neutral-800 px-3 py-1.5 rounded-lg gap-2 border border-neutral-700 shadow-inner">
+            <Coins className="text-orange-500 w-4 h-4" />
+            <span className="font-black text-white">{points}</span>
           </div>
         </div>
       </header>
 
-      <main className="max-w-md mx-auto px-6 py-6">
-        {/* VIEW: LOJA */}
+      <main className="max-w-md mx-auto px-6 py-8">
+        {/* VIEW: LOJA (SHOP) */}
         {view === 'loja' && (
-          <div className="space-y-6">
-            <div className="flex justify-between items-end">
-              <div>
-                <h2 className="text-2xl font-bold text-slate-800">Lojinha</h2>
-                <p className="text-slate-500 text-sm">Troque seus pontos por mimos</p>
-              </div>
+          <div className="space-y-6 animate-in fade-in zoom-in-95 duration-300">
+            <div className="border-l-4 border-orange-500 pl-4">
+              <h2 className="text-3xl font-black italic uppercase">Lojinha</h2>
+              <p className="text-neutral-500 text-xs font-bold uppercase tracking-widest">Recompensas por Esforço</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               {shopItems.length > 0 ? shopItems.map(item => (
-                <div key={item.id} className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm transition-transform active:scale-95">
-                  <div className="h-32 bg-slate-200 relative overflow-hidden">
+                <div key={item.id} className="bg-neutral-900 rounded-xl overflow-hidden border border-neutral-800 flex flex-col group transition-all hover:border-orange-500/50">
+                  <div className="h-32 bg-neutral-800 relative">
                     <img 
                       src={item.imageUrl} 
-                      alt={item.name}
-                      className="w-full h-full object-cover"
-                      onError={(e) => { e.target.src = 'https://images.unsplash.com/photo-1544027993-37dbfe43562a?auto=format&fit=crop&q=80&w=400' }}
+                      className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500"
+                      onError={(e) => { e.target.src = 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?q=80&w=400' }}
                     />
-                  </div>
-                  <div className="p-3 space-y-2">
-                    <h3 className="font-semibold text-slate-800 truncate">{item.name}</h3>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-bold text-indigo-600">{item.price} pts</span>
-                      <button 
-                        onClick={() => handleBuyItem(item)}
-                        disabled={points < item.price}
-                        className={`p-2 rounded-full ${points >= item.price ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
+                    <div className="absolute top-2 right-2 bg-black/80 backdrop-blur-md px-2 py-1 rounded text-[10px] font-bold text-orange-500 border border-orange-500/30">
+                      {item.price} PTS
                     </div>
+                  </div>
+                  <div className="p-3 flex flex-col flex-grow justify-between">
+                    <h3 className="font-bold text-sm uppercase mb-3 line-clamp-1">{item.name}</h3>
+                    <button 
+                      onClick={() => handleBuyItem(item)}
+                      disabled={points < item.price}
+                      className={`w-full py-2 rounded font-black text-xs uppercase tracking-tighter transition-all ${
+                        points >= item.price 
+                        ? 'bg-orange-500 text-black hover:bg-orange-400 active:scale-95' 
+                        : 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
+                      }`}
+                    >
+                      RESGATAR
+                    </button>
                   </div>
                 </div>
               )) : (
-                <div className="col-span-2 py-12 text-center text-slate-400 italic">
-                  Loja vazia no momento...
+                <div className="col-span-2 py-12 text-center text-neutral-600 uppercase font-black opacity-20">
+                  Estoque Vazio
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* VIEW: PERFIL/MISSÕES */}
+        {/* VIEW: MISSÕES (TASKS) */}
         {view === 'perfil' && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-800">Missões</h2>
-              <p className="text-slate-500 text-sm">Complete e ganhe pontos extras</p>
+          <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+            <div className="border-l-4 border-orange-500 pl-4">
+              <h2 className="text-3xl font-black italic uppercase">Missões</h2>
+              <p className="text-neutral-500 text-xs font-bold uppercase tracking-widest">Treino do Dia</p>
             </div>
 
             <div className="space-y-3">
               {tasks.length > 0 ? tasks.map(task => (
-                <div key={task.id} className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between shadow-sm">
+                <div key={task.id} className="bg-neutral-900 p-4 rounded-xl border border-neutral-800 flex items-center justify-between group hover:border-orange-500/30 transition-colors">
                   <div>
-                    <h3 className="font-medium text-slate-800">{task.title}</h3>
-                    <div className="flex items-center gap-1 text-amber-600 font-bold text-xs mt-1">
-                      <Coins className="w-3 h-3" />
-                      +{task.points} pontos
+                    <h3 className="font-bold text-neutral-200 uppercase tracking-tight">{task.title}</h3>
+                    <div className="flex items-center gap-1 text-orange-500 font-black text-xs mt-1 italic">
+                      <Target className="w-3 h-3" />
+                      +{task.points} PTS
                     </div>
                   </div>
                   <button 
                     onClick={() => handleCompleteTask(task.points)}
-                    className="bg-emerald-50 text-emerald-600 p-2.5 rounded-full hover:bg-emerald-100 transition-colors"
+                    className="bg-orange-500 text-black p-2 rounded hover:bg-orange-400 active:scale-90 transition-all shadow-[0_0_10px_rgba(249,115,22,0.2)]"
                   >
                     <CheckCircle className="w-6 h-6" />
                   </button>
                 </div>
               )) : (
-                <div className="py-12 text-center text-slate-400 italic">
-                  Nenhuma missão disponível.
+                <div className="py-12 text-center text-neutral-600 uppercase font-black opacity-20">
+                  Sem missões hoje
                 </div>
               )}
             </div>
@@ -245,137 +247,86 @@ const App = () => {
 
         {/* VIEW: ADMIN */}
         {view === 'admin' && (
-          <div className="space-y-8">
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
             {!adminAuth ? (
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+              <div className="bg-neutral-900 p-8 rounded-2xl border border-neutral-800 shadow-2xl space-y-6">
                 <div className="text-center">
-                  <div className="bg-slate-100 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
-                    <Settings className="text-slate-500 w-6 h-6" />
-                  </div>
-                  <h2 className="font-bold text-lg">Área Administrativa</h2>
-                  <p className="text-slate-500 text-sm">Insira sua senha para gerenciar</p>
+                  <Settings className="text-orange-500 w-12 h-12 mx-auto mb-4 animate-spin-slow" />
+                  <h2 className="font-black text-2xl uppercase italic">Painel Admin</h2>
                 </div>
                 <input 
                   type="password" 
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Senha secreta..."
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="CHAVE DE ACESSO"
+                  className="w-full px-4 py-4 bg-black border border-neutral-800 rounded-xl focus:border-orange-500 outline-none text-center font-mono tracking-[0.5em]"
                 />
                 <button 
-                  onClick={() => password === '1234' ? setAdminAuth(true) : null} // Senha exemplo
-                  className="w-full py-3 bg-slate-900 text-white font-bold rounded-xl active:bg-black"
+                  onClick={() => password === '1234' ? setAdminAuth(true) : null}
+                  className="w-full py-4 bg-orange-500 text-black font-black uppercase rounded-xl hover:bg-orange-400 active:scale-95 transition-all"
                 >
-                  Entrar no Painel
+                  DESBLOQUEAR
                 </button>
               </div>
             ) : (
-              <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
-                <div className="flex justify-between items-center">
-                  <h2 className="text-xl font-bold">Painel de Controle</h2>
-                  <button onClick={() => {setAdminAuth(false); setPassword('');}} className="text-rose-500 font-medium text-sm flex items-center gap-1">
+              <div className="space-y-8 pb-10">
+                <div className="flex justify-between items-center bg-neutral-900 p-4 rounded-xl border border-neutral-800">
+                  <h2 className="font-black italic uppercase">Gestão Gym</h2>
+                  <button onClick={() => {setAdminAuth(false); setPassword('');}} className="text-orange-500 font-black text-xs uppercase flex items-center gap-1">
                     <LogOut className="w-4 h-4" /> Sair
                   </button>
                 </div>
 
-                {/* Adicionar Item na Loja */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-                  <h3 className="font-bold flex items-center gap-2">
-                    <Store className="w-4 h-4 text-indigo-500" /> Novo Item na Loja
-                  </h3>
-                  <div className="space-y-3">
-                    <input 
-                      type="text" 
-                      placeholder="Nome do produto (ex: Skincare)" 
-                      className="w-full p-3 bg-slate-50 border rounded-lg text-sm"
-                      value={newItem.name}
-                      onChange={(e) => setNewItem({...newItem, name: e.target.value})}
-                    />
-                    <div className="flex gap-2">
+                {/* Cadastro de Item */}
+                <div className="space-y-4">
+                   <h3 className="font-black text-xs text-neutral-500 uppercase tracking-widest flex items-center gap-2">
+                    <Store className="w-4 h-4" /> Adicionar Recompensa
+                   </h3>
+                   <div className="bg-neutral-900 p-5 rounded-xl border border-neutral-800 space-y-3 shadow-xl">
                       <input 
-                        type="number" 
-                        placeholder="Preço (pontos)" 
-                        className="w-1/3 p-3 bg-slate-50 border rounded-lg text-sm"
-                        value={newItem.price}
-                        onChange={(e) => setNewItem({...newItem, price: e.target.value})}
+                        type="text" 
+                        placeholder="Nome (ex: Whey Protein)" 
+                        className="w-full p-3 bg-black border border-neutral-800 rounded text-sm focus:border-orange-500 outline-none"
+                        value={newItem.name}
+                        onChange={(e) => setNewItem({...newItem, name: e.target.value})}
                       />
-                      <div className="relative flex-1">
-                         <Camera className="absolute left-3 top-3.5 w-4 h-4 text-slate-400" />
-                         <input 
+                      <div className="flex gap-2">
+                        <input 
+                          type="number" 
+                          placeholder="Pts" 
+                          className="w-24 p-3 bg-black border border-neutral-800 rounded text-sm focus:border-orange-500 outline-none"
+                          value={newItem.price}
+                          onChange={(e) => setNewItem({...newItem, price: e.target.value})}
+                        />
+                        <input 
                           type="text" 
-                          placeholder="Link da imagem (opcional)" 
-                          className="w-full p-3 pl-9 bg-slate-50 border rounded-lg text-sm"
+                          placeholder="URL da Foto" 
+                          className="flex-1 p-3 bg-black border border-neutral-800 rounded text-sm focus:border-orange-500 outline-none"
                           value={newItem.imageUrl}
                           onChange={(e) => setNewItem({...newItem, imageUrl: e.target.value})}
                         />
                       </div>
-                    </div>
-                    <button 
-                      onClick={addShopItem}
-                      className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2"
-                    >
-                      <Plus className="w-5 h-5" /> Adicionar à Loja
-                    </button>
-                  </div>
-
-                  <div className="pt-4 border-t border-slate-100">
-                    <h4 className="text-xs font-bold text-slate-400 uppercase mb-3">Itens Atuais</h4>
-                    <div className="space-y-2 max-h-40 overflow-y-auto">
-                      {shopItems.map(item => (
-                        <div key={item.id} className="flex items-center justify-between bg-slate-50 p-2 rounded-lg">
-                          <div className="flex items-center gap-2">
-                             <img src={item.imageUrl} className="w-8 h-8 rounded object-cover border" />
-                             <span className="text-sm font-medium">{item.name}</span>
-                          </div>
-                          <button onClick={() => deleteItem(item.id, 'shopItems')} className="text-rose-500 p-1">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                      <button onClick={addShopItem} className="w-full bg-white text-black py-3 rounded font-black uppercase text-xs hover:bg-orange-500 transition-colors">
+                        Cadastrar Item
+                      </button>
+                   </div>
                 </div>
 
-                {/* Adicionar Missão */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-                  <h3 className="font-bold flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-emerald-500" /> Nova Missão
-                  </h3>
-                  <div className="flex gap-2">
-                    <input 
-                      type="text" 
-                      placeholder="Ex: Beber 2L de água" 
-                      className="flex-1 p-3 bg-slate-50 border rounded-lg text-sm"
-                      value={newTask.title}
-                      onChange={(e) => setNewTask({...newTask, title: e.target.value})}
-                    />
-                    <input 
-                      type="number" 
-                      placeholder="Pontos" 
-                      className="w-20 p-3 bg-slate-50 border rounded-lg text-sm"
-                      value={newTask.points}
-                      onChange={(e) => setNewTask({...newTask, points: e.target.value})}
-                    />
-                  </div>
-                  <button 
-                    onClick={addTask}
-                    className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2"
-                  >
-                    <Plus className="w-5 h-5" /> Adicionar Missão
-                  </button>
-
-                  <div className="pt-4 border-t border-slate-100">
-                    <h4 className="text-xs font-bold text-slate-400 uppercase mb-3">Missões Ativas</h4>
-                    <div className="space-y-2">
-                      {tasks.map(task => (
-                        <div key={task.id} className="flex items-center justify-between bg-slate-50 p-2 rounded-lg">
-                          <span className="text-sm font-medium">{task.title} (+{task.points})</span>
-                          <button onClick={() => deleteItem(task.id, 'tasks')} className="text-rose-500 p-1">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                {/* Gestão de Listas */}
+                <div className="grid grid-cols-1 gap-6">
+                  <div className="space-y-3">
+                    <h4 className="text-[10px] font-black text-neutral-600 uppercase tracking-widest">Estoque Atual</h4>
+                    {shopItems.map(item => (
+                      <div key={item.id} className="flex items-center justify-between bg-neutral-900 p-3 rounded border border-neutral-800">
+                        <div className="flex items-center gap-3">
+                          <img src={item.imageUrl} className="w-8 h-8 rounded object-cover grayscale" />
+                          <span className="text-xs font-bold uppercase">{item.name}</span>
                         </div>
-                      ))}
-                    </div>
+                        <button onClick={() => deleteItem(item.id, 'shopItems')} className="text-neutral-600 hover:text-orange-500 p-1">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -384,30 +335,40 @@ const App = () => {
         )}
       </main>
 
-      {/* Navegação Inferior Tab Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-6 py-3 flex justify-around items-center z-20">
+      {/* Tab Bar Navegação */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-neutral-900/80 backdrop-blur-xl border-t border-neutral-800 px-6 py-3 flex justify-around items-center z-50">
         <button 
           onClick={() => setView('loja')}
-          className={`flex flex-col items-center gap-1 ${view === 'loja' ? 'text-indigo-600' : 'text-slate-400'}`}
+          className={`flex flex-col items-center gap-1 transition-all ${view === 'loja' ? 'text-orange-500 scale-110' : 'text-neutral-600'}`}
         >
           <Store className="w-6 h-6" />
-          <span className="text-[10px] font-bold uppercase tracking-wider">Loja</span>
+          <span className="text-[9px] font-black uppercase italic">Shop</span>
         </button>
         <button 
           onClick={() => setView('perfil')}
-          className={`flex flex-col items-center gap-1 ${view === 'perfil' ? 'text-indigo-600' : 'text-slate-400'}`}
+          className={`flex flex-col items-center gap-1 transition-all ${view === 'perfil' ? 'text-orange-500 scale-110' : 'text-neutral-600'}`}
         >
-          <CheckCircle className="w-6 h-6" />
-          <span className="text-[10px] font-bold uppercase tracking-wider">Missões</span>
+          <Trophy className="w-6 h-6" />
+          <span className="text-[9px] font-black uppercase italic">Metas</span>
         </button>
         <button 
           onClick={() => setView('admin')}
-          className={`flex flex-col items-center gap-1 ${view === 'admin' ? 'text-indigo-600' : 'text-slate-400'}`}
+          className={`flex flex-col items-center gap-1 transition-all ${view === 'admin' ? 'text-orange-500 scale-110' : 'text-neutral-600'}`}
         >
           <Settings className="w-6 h-6" />
-          <span className="text-[10px] font-bold uppercase tracking-wider">Admin</span>
+          <span className="text-[9px] font-black uppercase italic">Admin</span>
         </button>
       </nav>
+      
+      <style>{`
+        @keyframes spin-slow {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .animate-spin-slow {
+          animation: spin-slow 8s linear infinite;
+        }
+      `}</style>
     </div>
   );
 };
