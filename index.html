@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FitRewards - Vitória</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap');
+        body { font-family: 'Poppins', sans-serif; background-color: #f8fafc; color: #1e293b; }
+        .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+        .active-tab { color: #ef4444; border-bottom: 2px solid #ef4444; }
+    </style>
+</head>
+<body class="min-h-screen pb-24">
+
+    <header class="bg-gradient-to-r from-rose-500 to-red-600 p-6 text-white rounded-b-[2.5rem] shadow-lg sticky top-0 z-50">
+        <div class="flex justify-between items-center max-w-md mx-auto">
+            <div>
+                <h1 class="text-2xl font-black tracking-tight italic">VITGYM</h1>
+                <p class="text-[10px] opacity-80 font-bold uppercase tracking-widest">Vitória</p>
+            </div>
+            <div class="bg-white/20 backdrop-blur-md p-3 rounded-2xl text-center min-w-[100px] border border-white/10">
+                <p class="text-[9px] uppercase font-black tracking-tighter opacity-70">Saldo</p>
+                <p class="text-2xl font-black" id="balance-display">500</p>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-md mx-auto p-5 space-y-6">
+        <!-- ABA FEED -->
+        <section id="tab-feed" class="tab-content">
+            <div class="flex justify-between items-center mb-5">
+                <h2 class="text-sm font-black text-slate-400 uppercase tracking-widest">Atividades</h2>
+                <button onclick="toggleModal('modal-checkin')" class="bg-rose-500 text-white px-5 py-2.5 rounded-2xl text-xs font-black shadow-lg">
+                    <i class="fas fa-plus mr-1"></i> NOVO
+                </button>
+            </div>
+            <div id="feed-list" class="space-y-4"></div>
+        </section>
+
+        <!-- ABA METAS -->
+        <section id="tab-metas" class="tab-content hidden">
+            <h2 class="text-sm font-black text-slate-400 uppercase tracking-widest mb-5">Tabela de Pontos 📊</h2>
+            <div id="metas-list" class="space-y-3"></div>
+        </section>
+
+        <!-- ABA LOJA -->
+        <section id="tab-shop" class="tab-content hidden">
+            <h2 class="text-sm font-black text-slate-400 uppercase tracking-widest mb-5">Prêmios 🎁</h2>
+            <div id="shop-list" class="grid grid-cols-2 gap-4"></div>
+        </section>
+
+        <!-- ABA ADMIN -->
+        <section id="tab-admin" class="tab-content hidden">
+             <div id="admin-login" class="text-center py-10 space-y-4">
+                <input id="admin-pass" type="password" placeholder="Senha Admin" class="w-full p-4 rounded-2xl border text-center outline-none">
+                <button onclick="checkAdmin()" class="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold">Entrar</button>
+            </div>
+            <div id="admin-panel" class="hidden text-center p-4">
+                <p class="text-xs mb-4">Modo Admin Ativo</p>
+                <button onclick="resetApp()" class="text-red-500 text-[10px] font-bold uppercase underline">Resetar Sistema</button>
+            </div>
+        </section>
+    </main>
+
+    <!-- NAVEGAÇÃO -->
+    <nav class="fixed bottom-0 left-0 right-0 glass border-t border-slate-100 p-4 flex justify-around items-center max-w-md mx-auto rounded-t-[2rem] shadow-2xl z-50">
+        <button onclick="switchTab('feed')" class="nav-btn active-tab flex flex-col items-center" id="nav-feed"><i class="fas fa-fire-alt"></i><span class="text-[9px] font-bold uppercase mt-1">Feed</span></button>
+        <button onclick="switchTab('metas')" class="nav-btn text-slate-400 flex flex-col items-center" id="nav-metas"><i class="fas fa-tasks"></i><span class="text-[9px] font-bold uppercase mt-1">Metas</span></button>
+        <button onclick="switchTab('shop')" class="nav-btn text-slate-400 flex flex-col items-center" id="nav-shop"><i class="fas fa-shopping-bag"></i><span class="text-[9px] font-bold uppercase mt-1">Loja</span></button>
+        <button onclick="switchTab('admin')" class="nav-btn text-slate-400 flex flex-col items-center" id="nav-admin"><i class="fas fa-cog"></i><span class="text-[9px] font-bold uppercase mt-1">Admin</span></button>
+    </nav>
+
+    <!-- MODAL CHECKIN -->
+    <div id="modal-checkin" class="fixed inset-0 bg-black/60 hidden z-[60] flex items-end justify-center p-4">
+        <div class="bg-white w-full max-w-md rounded-[3rem] p-8 space-y-5 mb-20 shadow-2xl">
+            <h3 class="text-xl font-black uppercase italic">Novo Check-in</h3>
+            <select id="checkin-activity" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm"></select>
+            <button onclick="submitCheckin()" class="w-full py-5 bg-rose-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl">Confirmar</button>
+            <button onclick="toggleModal('modal-checkin')" class="w-full text-slate-400 text-xs font-bold uppercase">Cancelar</button>
+        </div>
+    </div>
+
+    <script>
+        const DEFAULT_METAS = [
+            { nome: "Musculação", pontos: 5 },
+            { nome: "Cardio (30 min)", pontos: 5 },
+            { nome: "Cardio (20 min)", pontos: 2 },
+            { nome: "Beber 2L de Água", pontos: 5 },
+            { nome: "Consistência (5 dias)", pontos: 15 },
+            { nome: "Refeição Saudável", pontos: 3 },
+            { nome: "Tratamento H. pylori", pontos: 3000 },
+            { nome: "Cirurgia Joelho", pontos: 3000 }
+        ];
+
+        const DEFAULT_LOJA = [
+            { nome: "Conjunto Academia", preco: 700 },
+            { nome: "Refeição Livre", preco: 850 },
+            { nome: "Jantar Especial", preco: 1600 },
+            { nome: "Vale R$500 Shein", preco: 3000 }
+        ];
+
+        let state = JSON.parse(localStorage.getItem('vitgym_data')) || {
+            balance: 500,
+            checkins: [],
+            metas: DEFAULT_METAS,
+            loja: DEFAULT_LOJA
+        };
+
+        function save() { 
+            localStorage.setItem('vitgym_data', JSON.stringify(state)); 
+            render(); 
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active-tab', 'text-slate-400'));
+            document.getElementById(`tab-${tab}`).classList.remove('hidden');
+            document.getElementById(`nav-${tab}`).classList.add('active-tab');
+        }
+
+        function toggleModal(id) { document.getElementById(id).classList.toggle('hidden'); }
+
+        function checkAdmin() {
+            if(document.getElementById('admin-pass').value === '271224') {
+                document.getElementById('admin-login').classList.add('hidden');
+                document.getElementById('admin-panel').classList.remove('hidden');
+                render();
+            }
+        }
+
+        function submitCheckin() {
+            const actName = document.getElementById('checkin-activity').value;
+            const meta = state.metas.find(m => m.nome === actName);
+            state.checkins.unshift({ id: Date.now(), activity: actName, points: meta.pontos, date: new Date().toLocaleDateString() });
+            state.balance += meta.pontos;
+            toggleModal('modal-checkin');
+            save();
+        }
+
+        function deleteCheckin(id) {
+            const item = state.checkins.find(c => c.id === id);
+            state.balance -= item.points;
+            state.checkins = state.checkins.filter(c => c.id !== id);
+            save();
+        }
+
+        function render() {
+            document.getElementById('balance-display').innerText = state.balance;
+            const feed = document.getElementById('feed-list');
+            feed.innerHTML = state.checkins.map(c => `
+                <div class="bg-white p-5 rounded-[2rem] shadow-sm relative border border-slate-50">
+                    <span class="text-[9px] font-black text-slate-300 uppercase">${c.date}</span>
+                    <h3 class="font-black text-slate-800 uppercase italic">${c.activity}</h3>
+                    <div class="mt-2 text-emerald-500 font-black text-[10px]">+${c.points} PONTOS</div>
+                    <button onclick="deleteCheckin(${c.id})" class="absolute top-4 right-4 text-slate-200"><i class="fas fa-trash"></i></button>
+                </div>
+            `).join('');
+
+            document.getElementById('metas-list').innerHTML = state.metas.map(m => `
+                <div class="bg-white p-4 rounded-2xl flex justify-between border border-slate-50">
+                    <span class="font-bold text-xs uppercase">${m.nome}</span>
+                    <span class="text-rose-500 font-black text-xs">+${m.pontos}</span>
+                </div>
+            `).join('');
+
+            document.getElementById('shop-list').innerHTML = state.loja.map(i => `
+                <div class="bg-white p-4 rounded-[2rem] border border-slate-50 text-center">
+                    <h4 class="text-[10px] font-black uppercase">${i.nome}</h4>
+                    <p class="text-rose-600 font-black text-xs mt-2">${i.preco} pts</p>
+                </div>
+            `).join('');
+
+            document.getElementById('checkin-activity').innerHTML = state.metas.map(m => `<option value="${m.nome}">${m.nome}</option>`).join('');
+        }
+
+        function resetApp() { localStorage.clear(); location.reload(); }
+        render();
+    </script>
+</body>
+</html>
