@@ -3,14 +3,13 @@ import {
   Trophy, 
   Store, 
   Settings, 
-  Plus, 
-  Trash2, 
   CheckCircle, 
   Coins, 
-  LogOut,
-  Camera,
   Dumbbell,
-  Target
+  Trash2,
+  RefreshCw,
+  AlertCircle,
+  Plus
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
@@ -22,29 +21,33 @@ import {
   onSnapshot, 
   addDoc, 
   updateDoc, 
-  deleteDoc 
+  deleteDoc,
+  query
 } from 'firebase/firestore';
 
-// --- CONFIGURAÇÃO FIREBASE ---
+// Configuração do Firebase extraída do ambiente
 const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'vitoria-gym-rewards';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'vitoria-gym-v2';
 
 const App = () => {
   const [user, setUser] = useState(null);
-  const [view, setView] = useState('loja');
   const [points, setPoints] = useState(0);
+  const [view, setView] = useState('loja');
   const [shopItems, setShopItems] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [adminAuth, setAdminAuth] = useState(false);
-  const [password, setPassword] = useState('');
-  const [newItem, setNewItem] = useState({ name: '', price: '', imageUrl: '' });
+  const [error, setError] = useState(null);
+  
+  // Estados do Administrador
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [passInput, setPassInput] = useState('');
+  const [newItem, setNewItem] = useState({ name: '', price: '', img: '' });
   const [newTask, setNewTask] = useState({ title: '', points: '' });
 
-  // 1. Inicializar Auth com Correção de Bug de Carregamento
+  // 1. Ciclo de Autenticação (Regra Obrigatória)
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -54,275 +57,304 @@ const App = () => {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("Erro na autenticação:", err);
+        console.error("Erro na Autenticação:", err);
+        setError("Falha ao ligar ao servidor de segurança.");
       }
     };
-    
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      if (!u) setLoading(false);
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (!currentUser) setLoading(false);
     });
+
     return () => unsubscribe();
   }, []);
 
-  // 2. Buscar Dados (Sincronizado com o User)
+  // 2. Sincronização de Dados (Regra de Caminhos Estritos)
   useEffect(() => {
     if (!user) return;
 
-    // Referência do perfil do usuário
-    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
+    setLoading(true);
+
+    // Referência ao Perfil do Utilizador (Privado)
+    const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile');
     
-    const unsubPoints = onSnapshot(userDocRef, (docSnap) => {
+    const unsubProfile = onSnapshot(profileRef, (docSnap) => {
       if (docSnap.exists()) {
         setPoints(docSnap.data().points || 0);
       } else {
-        setDoc(userDocRef, { points: 0 });
+        // Inicializa o perfil se for a primeira vez
+        setDoc(profileRef, { points: 0, lastUpdate: Date.now() });
       }
       setLoading(false);
     }, (err) => {
-      console.error("Erro ao buscar pontos:", err);
+      console.error("Erro no Perfil:", err);
+      setError("Não foi possível carregar os seus pontos.");
       setLoading(false);
     });
 
-    // Itens da Loja
-    const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shopItems');
-    const unsubShop = onSnapshot(shopCol, (snap) => {
-      setShopItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    // Referência à Loja (Público)
+    const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shop');
+    const unsubShop = onSnapshot(shopCol, (snapshot) => {
+      setShopItems(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (err) => console.error("Erro na Loja:", err));
 
-    // Tarefas/Missões
+    // Referência às Missões (Público)
     const tasksCol = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
-    const unsubTasks = onSnapshot(tasksCol, (snap) => {
-      setTasks(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    const unsubTasks = onSnapshot(tasksCol, (snapshot) => {
+      setTasks(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (err) => console.error("Erro nas Missões:", err));
 
     return () => {
-      unsubPoints();
+      unsubProfile();
       unsubShop();
       unsubTasks();
     };
   }, [user]);
 
-  // Ações
-  const handleCompleteTask = async (taskPoints) => {
+  // Ações do Utilizador
+  const claimTask = async (taskPoints) => {
     if (!user) return;
-    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
-    await updateDoc(userDocRef, { points: points + Number(taskPoints) });
+    const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile');
+    await updateDoc(profileRef, { points: points + Number(taskPoints) });
   };
 
-  const handleBuyItem = async (item) => {
+  const buyItem = async (item) => {
     if (!user || points < item.price) return;
-    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
-    await updateDoc(userDocRef, { points: points - item.price });
+    const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile');
+    await updateDoc(profileRef, { points: points - item.price });
   };
 
-  // Admin Actions
-  const addShopItem = async () => {
+  // Ações Administrativas
+  const handleAddShop = async () => {
     if (!newItem.name || !newItem.price) return;
-    const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shopItems');
-    await addDoc(shopCol, { 
-      name: newItem.name, 
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'shop'), {
+      name: newItem.name,
       price: Number(newItem.price),
-      imageUrl: newItem.imageUrl || 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?q=80&w=400'
+      img: newItem.img || 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=400'
     });
-    setNewItem({ name: '', price: '', imageUrl: '' });
+    setNewItem({ name: '', price: '', img: '' });
   };
 
-  const addTask = async () => {
+  const handleAddTask = async () => {
     if (!newTask.title || !newTask.points) return;
-    const tasksCol = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
-    await addDoc(tasksCol, { title: newTask.title, points: Number(newTask.points) });
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tasks'), {
+      title: newTask.title,
+      points: Number(newTask.points)
+    });
     setNewTask({ title: '', points: '' });
   };
 
-  const deleteItem = async (id, collectionName) => {
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', collectionName, id));
+  const deleteItem = async (id, col) => {
+    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', col, id));
   };
 
   if (loading) return (
-    <div className="min-h-screen bg-black flex flex-col items-center justify-center text-orange-500">
+    <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center p-6 text-orange-500">
       <Dumbbell className="w-12 h-12 animate-bounce mb-4" />
-      <p className="font-bold tracking-widest animate-pulse">CARREGANDO TREINO...</p>
+      <h2 className="text-sm font-black uppercase italic tracking-widest animate-pulse">A carregar ginásio...</h2>
+    </div>
+  );
+
+  if (error) return (
+    <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center p-8 text-center">
+      <AlertCircle className="w-16 h-16 text-red-500 mb-4" />
+      <h2 className="text-white font-bold text-xl mb-2">Erro de Ligação</h2>
+      <p className="text-neutral-500 text-sm mb-8 leading-relaxed">{error}</p>
+      <button 
+        onClick={() => window.location.reload()}
+        className="flex items-center gap-2 bg-orange-500 text-black px-8 py-3 rounded-full font-black uppercase italic hover:scale-105 transition-transform"
+      >
+        <RefreshCw className="w-5 h-5" /> Tentar Novamente
+      </button>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white font-sans pb-24 selection:bg-orange-500">
-      {/* Header Estilo Gym */}
-      <header className="bg-neutral-900 border-b border-neutral-800 sticky top-0 z-50 shadow-lg">
-        <div className="max-w-md mx-auto px-6 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="bg-orange-500 p-1.5 rounded rotate-3 shadow-[0_0_15px_rgba(249,115,22,0.4)]">
-              <Dumbbell className="text-black w-5 h-5" />
-            </div>
-            <h1 className="font-black text-xl italic uppercase tracking-tighter">Vitoria<span className="text-orange-500">Gym</span></h1>
+    <div className="min-h-screen bg-neutral-950 text-white font-sans">
+      {/* Barra Superior */}
+      <header className="sticky top-0 z-50 bg-neutral-900/80 backdrop-blur-md border-b border-white/5 px-6 py-4 flex justify-between items-center">
+        <div className="flex items-center gap-2">
+          <div className="bg-orange-500 p-1.5 rounded shadow-[0_0_15px_rgba(249,115,22,0.4)]">
+            <Dumbbell className="w-5 h-5 text-black" />
           </div>
-          <div className="flex items-center bg-neutral-800 px-3 py-1.5 rounded-lg gap-2 border border-neutral-700 shadow-inner">
-            <Coins className="text-orange-500 w-4 h-4" />
-            <span className="font-black text-white">{points}</span>
-          </div>
+          <span className="font-black italic text-xl uppercase tracking-tighter">
+            Vitoria<span className="text-orange-500">Gym</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-2 bg-black/40 border border-white/10 px-4 py-2 rounded-full">
+          <Coins className="w-4 h-4 text-orange-500" />
+          <span className="font-black text-sm">{points}</span>
         </div>
       </header>
 
-      <main className="max-w-md mx-auto px-6 py-8">
-        {/* VIEW: LOJA (SHOP) */}
+      <main className="max-w-md mx-auto p-6 pb-32">
+        {/* VIEW: LOJA */}
         {view === 'loja' && (
-          <div className="space-y-6 animate-in fade-in zoom-in-95 duration-300">
-            <div className="border-l-4 border-orange-500 pl-4">
-              <h2 className="text-3xl font-black italic uppercase">Lojinha</h2>
-              <p className="text-neutral-500 text-xs font-bold uppercase tracking-widest">Recompensas por Esforço</p>
+          <div className="space-y-6 animate-in fade-in duration-500">
+            <div>
+              <h1 className="text-3xl font-black italic uppercase tracking-tighter">Loja</h1>
+              <p className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest">Resgate as suas recompensas</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              {shopItems.length > 0 ? shopItems.map(item => (
-                <div key={item.id} className="bg-neutral-900 rounded-xl overflow-hidden border border-neutral-800 flex flex-col group transition-all hover:border-orange-500/50">
-                  <div className="h-32 bg-neutral-800 relative">
+              {shopItems.length === 0 && (
+                <p className="col-span-2 text-center text-neutral-600 py-10 text-xs italic">Nenhum item disponível no momento.</p>
+              )}
+              {shopItems.map(item => (
+                <div key={item.id} className="bg-neutral-900 rounded-3xl overflow-hidden border border-white/5 group">
+                  <div className="h-32 bg-neutral-800 overflow-hidden">
                     <img 
-                      src={item.imageUrl} 
-                      className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500"
-                      onError={(e) => { e.target.src = 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?q=80&w=400' }}
+                      src={item.img || 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=400'} 
+                      className="w-full h-full object-cover opacity-70 group-hover:scale-110 transition-transform duration-500" 
+                      alt={item.name}
+                      onError={(e) => e.target.src = 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=400'}
                     />
-                    <div className="absolute top-2 right-2 bg-black/80 backdrop-blur-md px-2 py-1 rounded text-[10px] font-bold text-orange-500 border border-orange-500/30">
-                      {item.price} PTS
-                    </div>
                   </div>
-                  <div className="p-3 flex flex-col flex-grow justify-between">
-                    <h3 className="font-bold text-sm uppercase mb-3 line-clamp-1">{item.name}</h3>
+                  <div className="p-4 space-y-3">
+                    <h3 className="text-xs font-bold uppercase truncate">{item.name}</h3>
+                    <div className="flex items-center justify-between">
+                      <span className="text-orange-500 font-black text-sm">{item.price} <small className="text-[8px]">PTS</small></span>
+                    </div>
                     <button 
-                      onClick={() => handleBuyItem(item)}
+                      onClick={() => buyItem(item)}
                       disabled={points < item.price}
-                      className={`w-full py-2 rounded font-black text-xs uppercase tracking-tighter transition-all ${
+                      className={`w-full py-2 rounded-xl font-black text-[10px] uppercase transition-all ${
                         points >= item.price 
                         ? 'bg-orange-500 text-black hover:bg-orange-400 active:scale-95' 
                         : 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
                       }`}
                     >
-                      RESGATAR
+                      Resgatar
                     </button>
                   </div>
                 </div>
-              )) : (
-                <div className="col-span-2 py-12 text-center text-neutral-600 uppercase font-black opacity-20">
-                  Estoque Vazio
-                </div>
-              )}
+              ))}
             </div>
           </div>
         )}
 
-        {/* VIEW: MISSÕES (TASKS) */}
-        {view === 'perfil' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-            <div className="border-l-4 border-orange-500 pl-4">
-              <h2 className="text-3xl font-black italic uppercase">Missões</h2>
-              <p className="text-neutral-500 text-xs font-bold uppercase tracking-widest">Treino do Dia</p>
+        {/* VIEW: MISSÕES */}
+        {view === 'metas' && (
+          <div className="space-y-6 animate-in slide-in-from-right duration-500">
+            <div>
+              <h1 className="text-3xl font-black italic uppercase tracking-tighter">Missões</h1>
+              <p className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest">Treine para ganhar pontos</p>
             </div>
 
             <div className="space-y-3">
-              {tasks.length > 0 ? tasks.map(task => (
-                <div key={task.id} className="bg-neutral-900 p-4 rounded-xl border border-neutral-800 flex items-center justify-between group hover:border-orange-500/30 transition-colors">
+              {tasks.length === 0 && (
+                <p className="text-center text-neutral-600 py-10 text-xs italic">Aguarde novas missões em breve.</p>
+              )}
+              {tasks.map(task => (
+                <div key={task.id} className="bg-neutral-900 p-5 rounded-3xl border border-white/5 flex items-center justify-between">
                   <div>
-                    <h3 className="font-bold text-neutral-200 uppercase tracking-tight">{task.title}</h3>
-                    <div className="flex items-center gap-1 text-orange-500 font-black text-xs mt-1 italic">
-                      <Target className="w-3 h-3" />
-                      +{task.points} PTS
+                    <h3 className="font-bold uppercase text-sm mb-1">{task.title}</h3>
+                    <div className="flex items-center gap-1.5 text-orange-500">
+                      <Coins className="w-3 h-3" />
+                      <span className="font-black italic text-xs">+{task.points} PONTOS</span>
                     </div>
                   </div>
                   <button 
-                    onClick={() => handleCompleteTask(task.points)}
-                    className="bg-orange-500 text-black p-2 rounded hover:bg-orange-400 active:scale-90 transition-all shadow-[0_0_10px_rgba(249,115,22,0.2)]"
+                    onClick={() => claimTask(task.points)}
+                    className="bg-orange-500/10 text-orange-500 p-3 rounded-2xl hover:bg-orange-500 hover:text-black transition-all active:scale-90"
                   >
                     <CheckCircle className="w-6 h-6" />
                   </button>
                 </div>
-              )) : (
-                <div className="py-12 text-center text-neutral-600 uppercase font-black opacity-20">
-                  Sem missões hoje
-                </div>
-              )}
+              ))}
             </div>
           </div>
         )}
 
         {/* VIEW: ADMIN */}
         {view === 'admin' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
-            {!adminAuth ? (
-              <div className="bg-neutral-900 p-8 rounded-2xl border border-neutral-800 shadow-2xl space-y-6">
-                <div className="text-center">
-                  <Settings className="text-orange-500 w-12 h-12 mx-auto mb-4 animate-spin-slow" />
-                  <h2 className="font-black text-2xl uppercase italic">Painel Admin</h2>
+          <div className="space-y-6 animate-in slide-in-from-bottom duration-500">
+            {!isAdmin ? (
+              <div className="bg-neutral-900 p-8 rounded-[40px] border border-white/5 text-center">
+                <div className="bg-orange-500/10 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <Settings className="w-8 h-8 text-orange-500" />
                 </div>
+                <h2 className="text-xl font-black italic uppercase mb-6 tracking-tighter">Acesso Restrito</h2>
                 <input 
-                  type="password" 
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="CHAVE DE ACESSO"
-                  className="w-full px-4 py-4 bg-black border border-neutral-800 rounded-xl focus:border-orange-500 outline-none text-center font-mono tracking-[0.5em]"
+                  type="password"
+                  value={passInput}
+                  onChange={e => setPassInput(e.target.value)}
+                  placeholder="PALAVRA-PASSE"
+                  className="w-full bg-black border border-white/10 rounded-2xl p-4 text-center font-black mb-4 outline-none focus:border-orange-500 transition-colors"
                 />
                 <button 
-                  onClick={() => password === '1234' ? setAdminAuth(true) : null}
-                  className="w-full py-4 bg-orange-500 text-black font-black uppercase rounded-xl hover:bg-orange-400 active:scale-95 transition-all"
+                  onClick={() => passInput === 'admin123' && setIsAdmin(true)}
+                  className="w-full bg-white text-black py-4 rounded-2xl font-black uppercase text-xs hover:bg-orange-500 transition-colors"
                 >
-                  DESBLOQUEAR
+                  Entrar no Painel
                 </button>
               </div>
             ) : (
-              <div className="space-y-8 pb-10">
-                <div className="flex justify-between items-center bg-neutral-900 p-4 rounded-xl border border-neutral-800">
-                  <h2 className="font-black italic uppercase">Gestão Gym</h2>
-                  <button onClick={() => {setAdminAuth(false); setPassword('');}} className="text-orange-500 font-black text-xs uppercase flex items-center gap-1">
-                    <LogOut className="w-4 h-4" /> Sair
+              <div className="space-y-8">
+                {/* Gestão de Itens */}
+                <div className="bg-neutral-900 p-6 rounded-3xl border border-white/5 space-y-4">
+                  <h3 className="font-black italic uppercase text-orange-500 flex items-center gap-2">
+                    <Plus className="w-4 h-4" /> Novo Item
+                  </h3>
+                  <input 
+                    placeholder="Nome do Produto"
+                    className="w-full bg-black border border-white/10 rounded-xl p-3 text-sm outline-none"
+                    value={newItem.name}
+                    onChange={e => setNewItem({...newItem, name: e.target.value})}
+                  />
+                  <div className="flex gap-2">
+                    <input 
+                      type="number"
+                      placeholder="Preço"
+                      className="w-24 bg-black border border-white/10 rounded-xl p-3 text-sm outline-none"
+                      value={newItem.price}
+                      onChange={e => setNewItem({...newItem, price: e.target.value})}
+                    />
+                    <input 
+                      placeholder="URL da Imagem"
+                      className="flex-1 bg-black border border-white/10 rounded-xl p-3 text-sm outline-none"
+                      value={newItem.img}
+                      onChange={e => setNewItem({...newItem, img: e.target.value})}
+                    />
+                  </div>
+                  <button onClick={handleAddShop} className="w-full bg-orange-500 text-black py-3 rounded-xl font-black uppercase text-[10px]">
+                    Adicionar à Loja
                   </button>
                 </div>
 
-                {/* Cadastro de Item */}
-                <div className="space-y-4">
-                   <h3 className="font-black text-xs text-neutral-500 uppercase tracking-widest flex items-center gap-2">
-                    <Store className="w-4 h-4" /> Adicionar Recompensa
-                   </h3>
-                   <div className="bg-neutral-900 p-5 rounded-xl border border-neutral-800 space-y-3 shadow-xl">
-                      <input 
-                        type="text" 
-                        placeholder="Nome (ex: Whey Protein)" 
-                        className="w-full p-3 bg-black border border-neutral-800 rounded text-sm focus:border-orange-500 outline-none"
-                        value={newItem.name}
-                        onChange={(e) => setNewItem({...newItem, name: e.target.value})}
-                      />
-                      <div className="flex gap-2">
-                        <input 
-                          type="number" 
-                          placeholder="Pts" 
-                          className="w-24 p-3 bg-black border border-neutral-800 rounded text-sm focus:border-orange-500 outline-none"
-                          value={newItem.price}
-                          onChange={(e) => setNewItem({...newItem, price: e.target.value})}
-                        />
-                        <input 
-                          type="text" 
-                          placeholder="URL da Foto" 
-                          className="flex-1 p-3 bg-black border border-neutral-800 rounded text-sm focus:border-orange-500 outline-none"
-                          value={newItem.imageUrl}
-                          onChange={(e) => setNewItem({...newItem, imageUrl: e.target.value})}
-                        />
-                      </div>
-                      <button onClick={addShopItem} className="w-full bg-white text-black py-3 rounded font-black uppercase text-xs hover:bg-orange-500 transition-colors">
-                        Cadastrar Item
-                      </button>
-                   </div>
+                {/* Gestão de Missões */}
+                <div className="bg-neutral-900 p-6 rounded-3xl border border-white/5 space-y-4">
+                  <h3 className="font-black italic uppercase text-orange-500 flex items-center gap-2">
+                    <Plus className="w-4 h-4" /> Nova Missão
+                  </h3>
+                  <input 
+                    placeholder="Título da Missão"
+                    className="w-full bg-black border border-white/10 rounded-xl p-3 text-sm outline-none"
+                    value={newTask.title}
+                    onChange={e => setNewTask({...newTask, title: e.target.value})}
+                  />
+                  <input 
+                    type="number"
+                    placeholder="Pontos"
+                    className="w-full bg-black border border-white/10 rounded-xl p-3 text-sm outline-none"
+                    value={newTask.points}
+                    onChange={e => setNewTask({...newTask, points: e.target.value})}
+                  />
+                  <button onClick={handleAddTask} className="w-full bg-orange-500 text-black py-3 rounded-xl font-black uppercase text-[10px]">
+                    Criar Missão
+                  </button>
                 </div>
 
-                {/* Gestão de Listas */}
-                <div className="grid grid-cols-1 gap-6">
-                  <div className="space-y-3">
-                    <h4 className="text-[10px] font-black text-neutral-600 uppercase tracking-widest">Estoque Atual</h4>
-                    {shopItems.map(item => (
-                      <div key={item.id} className="flex items-center justify-between bg-neutral-900 p-3 rounded border border-neutral-800">
-                        <div className="flex items-center gap-3">
-                          <img src={item.imageUrl} className="w-8 h-8 rounded object-cover grayscale" />
-                          <span className="text-xs font-bold uppercase">{item.name}</span>
-                        </div>
-                        <button onClick={() => deleteItem(item.id, 'shopItems')} className="text-neutral-600 hover:text-orange-500 p-1">
+                {/* Lista de Remoção */}
+                <div className="space-y-4">
+                  <h4 className="text-[10px] font-black text-neutral-500 uppercase tracking-widest px-2">Gerir Conteúdo Ativo</h4>
+                  <div className="grid gap-2">
+                    {shopItems.map(i => (
+                      <div key={i.id} className="flex items-center justify-between bg-neutral-900/50 p-3 rounded-xl border border-white/5">
+                        <span className="text-[10px] font-bold uppercase text-neutral-400">{i.name}</span>
+                        <button onClick={() => deleteItem(i.id, 'shop')} className="text-red-500 p-1.5 hover:bg-red-500/10 rounded-lg">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -335,40 +367,30 @@ const App = () => {
         )}
       </main>
 
-      {/* Tab Bar Navegação */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-neutral-900/80 backdrop-blur-xl border-t border-neutral-800 px-6 py-3 flex justify-around items-center z-50">
+      {/* Navegação Inferior */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-neutral-900/90 backdrop-blur-xl border-t border-white/5 flex justify-around items-center py-4 px-6 z-50">
         <button 
           onClick={() => setView('loja')}
-          className={`flex flex-col items-center gap-1 transition-all ${view === 'loja' ? 'text-orange-500 scale-110' : 'text-neutral-600'}`}
+          className={`flex flex-col items-center gap-1.5 transition-all ${view === 'loja' ? 'text-orange-500 scale-110' : 'text-neutral-500'}`}
         >
           <Store className="w-6 h-6" />
-          <span className="text-[9px] font-black uppercase italic">Shop</span>
+          <span className="text-[8px] font-black uppercase italic tracking-wider">Loja</span>
         </button>
         <button 
-          onClick={() => setView('perfil')}
-          className={`flex flex-col items-center gap-1 transition-all ${view === 'perfil' ? 'text-orange-500 scale-110' : 'text-neutral-600'}`}
+          onClick={() => setView('metas')}
+          className={`flex flex-col items-center gap-1.5 transition-all ${view === 'metas' ? 'text-orange-500 scale-110' : 'text-neutral-500'}`}
         >
           <Trophy className="w-6 h-6" />
-          <span className="text-[9px] font-black uppercase italic">Metas</span>
+          <span className="text-[8px] font-black uppercase italic tracking-wider">Metas</span>
         </button>
         <button 
           onClick={() => setView('admin')}
-          className={`flex flex-col items-center gap-1 transition-all ${view === 'admin' ? 'text-orange-500 scale-110' : 'text-neutral-600'}`}
+          className={`flex flex-col items-center gap-1.5 transition-all ${view === 'admin' ? 'text-orange-500 scale-110' : 'text-neutral-500'}`}
         >
           <Settings className="w-6 h-6" />
-          <span className="text-[9px] font-black uppercase italic">Admin</span>
+          <span className="text-[8px] font-black uppercase italic tracking-wider">Painel</span>
         </button>
       </nav>
-      
-      <style>{`
-        @keyframes spin-slow {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        .animate-spin-slow {
-          animation: spin-slow 8s linear infinite;
-        }
-      `}</style>
     </div>
   );
 };
