@@ -1,392 +1,415 @@
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VitGym - Olá, Vitória!</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800;900&display=swap');
-        body { font-family: 'Outfit', sans-serif; background-color: #fcfcfd; color: #1e293b; }
-        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
-        .active-tab { color: #f43f5e; }
-        .tab-content { animation: fadeIn 0.3s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .card-shadow { box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05); }
-    </style>
-</head>
-<body class="min-h-screen pb-28">
+import React, { useState, useEffect } from 'react';
+import { 
+  Trophy, 
+  Store, 
+  Settings, 
+  Plus, 
+  Trash2, 
+  User, 
+  CheckCircle, 
+  XCircle, 
+  Coins, 
+  ChevronRight,
+  LogOut,
+  Camera
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  query, 
+  orderBy 
+} from 'firebase/firestore';
 
-    <!-- Header -->
-    <header class="bg-white border-b border-slate-100 p-6 sticky top-0 z-50">
-        <div class="flex justify-between items-center max-w-md mx-auto">
-            <div>
-                <h1 class="text-2xl font-extrabold tracking-tight text-slate-900">Olá, Vitória!</h1>
-                <p class="text-[10px] text-rose-500 font-bold uppercase tracking-[0.2em]">VitGym Pro</p>
+// --- CONFIGURAÇÃO FIREBASE ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'vitoria-rewards-system';
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [view, setView] = useState('loja'); // 'loja', 'admin', 'perfil'
+  const [points, setPoints] = useState(0);
+  const [shopItems, setShopItems] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Estados para formulários Admin
+  const [adminAuth, setAdminAuth] = useState(false);
+  const [password, setPassword] = useState('');
+  const [newItem, setNewItem] = useState({ name: '', price: '', imageUrl: '' });
+  const [newTask, setNewTask] = useState({ title: '', points: '' });
+
+  // 1. Inicializar Auth
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Buscar Dados do Firestore
+  useEffect(() => {
+    if (!user) return;
+
+    // Pontos do usuário
+    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
+    const unsubPoints = onSnapshot(userDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setPoints(docSnap.data().points || 0);
+      } else {
+        setDoc(userDocRef, { points: 0 });
+      }
+      setLoading(false);
+    }, (err) => console.error("Erro pontos:", err));
+
+    // Itens da Loja (Público)
+    const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shopItems');
+    const unsubShop = onSnapshot(shopCol, (snap) => {
+      const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setShopItems(items);
+    }, (err) => console.error("Erro loja:", err));
+
+    // Tarefas (Público)
+    const tasksCol = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
+    const unsubTasks = onSnapshot(tasksCol, (snap) => {
+      const tks = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTasks(tks);
+    }, (err) => console.error("Erro tarefas:", err));
+
+    return () => {
+      unsubPoints();
+      unsubShop();
+      unsubTasks();
+    };
+  }, [user]);
+
+  // Funções de Lógica
+  const handleCompleteTask = async (taskPoints) => {
+    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
+    await updateDoc(userDocRef, { points: points + Number(taskPoints) });
+  };
+
+  const handleBuyItem = async (item) => {
+    if (points >= item.price) {
+      const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
+      await updateDoc(userDocRef, { points: points - item.price });
+      // Aqui você poderia adicionar um histórico de compras
+    }
+  };
+
+  // Funções Administrativas
+  const addShopItem = async () => {
+    if (!newItem.name || !newItem.price) return;
+    const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shopItems');
+    await addDoc(shopCol, { 
+      name: newItem.name, 
+      price: Number(newItem.price),
+      imageUrl: newItem.imageUrl || 'https://images.unsplash.com/photo-1544027993-37dbfe43562a?auto=format&fit=crop&q=80&w=400'
+    });
+    setNewItem({ name: '', price: '', imageUrl: '' });
+  };
+
+  const addTask = async () => {
+    if (!newTask.title || !newTask.points) return;
+    const tasksCol = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
+    await addDoc(tasksCol, { title: newTask.title, points: Number(newTask.points) });
+    setNewTask({ title: '', points: '' });
+  };
+
+  const deleteItem = async (id, collectionName) => {
+    const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', collectionName, id);
+    await deleteDoc(itemDoc);
+  };
+
+  if (loading) return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-indigo-500"></div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-24">
+      {/* Header Fixo */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+        <div className="max-w-md mx-auto px-6 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <div className="bg-indigo-100 p-2 rounded-lg">
+              <Trophy className="text-indigo-600 w-5 h-5" />
             </div>
-            <div class="bg-rose-50 border border-rose-100 px-4 py-2 rounded-2xl text-right">
-                <p class="text-[9px] uppercase font-bold text-rose-400 leading-none">Saldo Atual</p>
-                <p class="text-xl font-black text-rose-600 leading-tight" id="balance-display">500</p>
-            </div>
+            <h1 className="font-bold text-lg tracking-tight">Vitória Rewards</h1>
+          </div>
+          <div className="flex items-center bg-amber-100 px-3 py-1.5 rounded-full gap-2 border border-amber-200">
+            <Coins className="text-amber-600 w-4 h-4" />
+            <span className="font-bold text-amber-700">{points}</span>
+          </div>
         </div>
-    </header>
+      </header>
 
-    <main class="max-w-md mx-auto p-5 space-y-8">
-        
-        <!-- ABA FEED (Registros do dia) -->
-        <section id="tab-feed" class="tab-content">
-            <div class="flex justify-between items-center mb-6">
-                <div>
-                    <h2 class="text-lg font-black text-slate-800">Registros do dia</h2>
-                    <p class="text-xs text-slate-400 font-medium italic">Seu histórico de conquistas</p>
+      <main className="max-w-md mx-auto px-6 py-6">
+        {/* VIEW: LOJA */}
+        {view === 'loja' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-end">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-800">Lojinha</h2>
+                <p className="text-slate-500 text-sm">Troque seus pontos por mimos</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              {shopItems.length > 0 ? shopItems.map(item => (
+                <div key={item.id} className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm transition-transform active:scale-95">
+                  <div className="h-32 bg-slate-200 relative overflow-hidden">
+                    <img 
+                      src={item.imageUrl} 
+                      alt={item.name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => { e.target.src = 'https://images.unsplash.com/photo-1544027993-37dbfe43562a?auto=format&fit=crop&q=80&w=400' }}
+                    />
+                  </div>
+                  <div className="p-3 space-y-2">
+                    <h3 className="font-semibold text-slate-800 truncate">{item.name}</h3>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-indigo-600">{item.price} pts</span>
+                      <button 
+                        onClick={() => handleBuyItem(item)}
+                        disabled={points < item.price}
+                        className={`p-2 rounded-full ${points >= item.price ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <button onclick="openCheckinModal()" class="w-12 h-12 bg-rose-500 text-white rounded-2xl flex items-center justify-center shadow-lg shadow-rose-200">
-                    <i class="fas fa-plus text-lg"></i>
+              )) : (
+                <div className="col-span-2 py-12 text-center text-slate-400 italic">
+                  Loja vazia no momento...
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: PERFIL/MISSÕES */}
+        {view === 'perfil' && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-800">Missões</h2>
+              <p className="text-slate-500 text-sm">Complete e ganhe pontos extras</p>
+            </div>
+
+            <div className="space-y-3">
+              {tasks.length > 0 ? tasks.map(task => (
+                <div key={task.id} className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between shadow-sm">
+                  <div>
+                    <h3 className="font-medium text-slate-800">{task.title}</h3>
+                    <div className="flex items-center gap-1 text-amber-600 font-bold text-xs mt-1">
+                      <Coins className="w-3 h-3" />
+                      +{task.points} pontos
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => handleCompleteTask(task.points)}
+                    className="bg-emerald-50 text-emerald-600 p-2.5 rounded-full hover:bg-emerald-100 transition-colors"
+                  >
+                    <CheckCircle className="w-6 h-6" />
+                  </button>
+                </div>
+              )) : (
+                <div className="py-12 text-center text-slate-400 italic">
+                  Nenhuma missão disponível.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: ADMIN */}
+        {view === 'admin' && (
+          <div className="space-y-8">
+            {!adminAuth ? (
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div className="text-center">
+                  <div className="bg-slate-100 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <Settings className="text-slate-500 w-6 h-6" />
+                  </div>
+                  <h2 className="font-bold text-lg">Área Administrativa</h2>
+                  <p className="text-slate-500 text-sm">Insira sua senha para gerenciar</p>
+                </div>
+                <input 
+                  type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Senha secreta..."
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                />
+                <button 
+                  onClick={() => password === '1234' ? setAdminAuth(true) : null} // Senha exemplo
+                  className="w-full py-3 bg-slate-900 text-white font-bold rounded-xl active:bg-black"
+                >
+                  Entrar no Painel
                 </button>
-            </div>
-            <div id="feed-list" class="space-y-4">
-                <!-- Conteúdo via JS -->
-            </div>
-        </section>
-
-        <!-- ABA METAS -->
-        <section id="tab-metas" class="tab-content hidden">
-            <div class="mb-6">
-                <h2 class="text-lg font-black text-slate-800 italic uppercase tracking-tighter">📋 Tabela de Metas</h2>
-                <p class="text-xs text-slate-500">Realize estas atividades para acumular pontos.</p>
-            </div>
-            <div id="metas-list" class="space-y-3">
-                <!-- Conteúdo via JS -->
-            </div>
-        </section>
-
-        <!-- ABA LOJA -->
-        <section id="tab-shop" class="tab-content hidden">
-            <div class="mb-6">
-                <h2 class="text-lg font-black text-slate-800 italic uppercase tracking-tighter">🎁 Itens da Lojinha</h2>
-                <p class="text-xs text-slate-500">Troque seu saldo por estes prêmios.</p>
-            </div>
-            <div id="shop-list" class="grid grid-cols-1 gap-3">
-                <!-- Conteúdo via JS -->
-            </div>
-        </section>
-
-        <!-- ABA ADMIN -->
-        <section id="tab-admin" class="tab-content hidden">
-             <div id="admin-login" class="text-center py-10 space-y-4">
-                <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400">
-                    <i class="fas fa-lock text-2xl"></i>
-                </div>
-                <input id="admin-pass" type="password" placeholder="Senha de Acesso" class="w-full p-4 rounded-2xl bg-white border border-slate-200 text-center outline-none focus:border-rose-300 transition-all">
-                <button onclick="checkAdmin()" class="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold">Entrar no Painel</button>
-            </div>
-
-            <div id="admin-panel" class="hidden space-y-6">
-                <div class="bg-rose-50 p-4 rounded-2xl border border-rose-100 flex justify-between items-center">
-                    <span class="text-xs font-bold text-rose-700">MODO EDITOR ATIVO</span>
-                    <button onclick="logoutAdmin()" class="text-[10px] bg-white px-3 py-1 rounded-lg shadow-sm font-bold">Sair</button>
+              </div>
+            ) : (
+              <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xl font-bold">Painel de Controle</h2>
+                  <button onClick={() => {setAdminAuth(false); setPassword('');}} className="text-rose-500 font-medium text-sm flex items-center gap-1">
+                    <LogOut className="w-4 h-4" /> Sair
+                  </button>
                 </div>
 
-                <!-- Gestão de Metas -->
-                <div class="space-y-4">
-                    <h3 class="font-black text-sm uppercase text-slate-400 flex justify-between">
-                        Gerenciar Metas
-                        <button onclick="openItemModal('meta')" class="text-rose-500">+ Novo</button>
-                    </h3>
-                    <div id="admin-metas-list" class="space-y-2"></div>
-                </div>
-
-                <!-- Gestão de Loja -->
-                <div class="space-y-4 pt-4 border-t border-slate-100">
-                    <h3 class="font-black text-sm uppercase text-slate-400 flex justify-between">
-                        Gerenciar Loja
-                        <button onclick="openItemModal('shop')" class="text-rose-500">+ Novo</button>
-                    </h3>
-                    <div id="admin-shop-list" class="space-y-2"></div>
-                </div>
-
-                <div class="pt-10">
-                    <button onclick="resetApp()" class="w-full text-red-400 text-[10px] font-bold uppercase tracking-widest underline opacity-50 hover:opacity-100">Resetar Todo o Sistema</button>
-                </div>
-            </div>
-        </section>
-    </main>
-
-    <!-- Navegação Inferior -->
-    <nav class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-md glass border border-white/50 p-3 flex justify-around items-center rounded-[2.5rem] shadow-2xl z-50">
-        <button onclick="switchTab('feed')" class="nav-btn active-tab flex flex-col items-center" id="nav-feed"><i class="fas fa-bolt text-lg"></i><span class="text-[8px] font-bold uppercase mt-1">Feed</span></button>
-        <button onclick="switchTab('metas')" class="nav-btn text-slate-400 flex flex-col items-center" id="nav-metas"><i class="fas fa-list-check text-lg"></i><span class="text-[8px] font-bold uppercase mt-1">Metas</span></button>
-        <button onclick="switchTab('shop')" class="nav-btn text-slate-400 flex flex-col items-center" id="nav-shop"><i class="fas fa-gift text-lg"></i><span class="text-[8px] font-bold uppercase mt-1">Loja</span></button>
-        <button onclick="switchTab('admin')" class="nav-btn text-slate-400 flex flex-col items-center" id="nav-admin"><i class="fas fa-fingerprint text-lg"></i><span class="text-[8px] font-bold uppercase mt-1">Admin</span></button>
-    </nav>
-
-    <!-- MODAL CHECKIN -->
-    <div id="modal-checkin" class="fixed inset-0 bg-slate-900/40 hidden z-[60] flex items-center justify-center p-6">
-        <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 space-y-6 shadow-2xl animate-fadeIn">
-            <h3 class="text-xl font-black text-slate-800">Novo Registro</h3>
-            <div>
-                <label class="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Escolha a Atividade</label>
-                <select id="checkin-activity" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none font-bold text-slate-700"></select>
-            </div>
-            <button onclick="submitCheckin()" class="w-full py-5 bg-rose-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-rose-200">Confirmar Ganho</button>
-            <button onclick="toggleModal('modal-checkin')" class="w-full text-slate-400 text-xs font-bold uppercase">Fechar</button>
-        </div>
-    </div>
-
-    <!-- MODAL EDITAR/ADICIONAR ITEM (ADMIN) -->
-    <div id="modal-item" class="fixed inset-0 bg-slate-900/40 hidden z-[60] flex items-center justify-center p-6">
-        <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 space-y-6 shadow-2xl">
-            <h3 id="item-modal-title" class="text-xl font-black text-slate-800 uppercase">Adicionar</h3>
-            <div class="space-y-4">
-                <input type="hidden" id="edit-index">
-                <input type="hidden" id="edit-type">
-                <div>
-                    <label class="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Nome</label>
-                    <input id="item-name" type="text" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold">
-                </div>
-                <div>
-                    <label id="item-value-label" class="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Pontos/Preço</label>
-                    <input id="item-value" type="number" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold">
-                </div>
-            </div>
-            <button onclick="saveItem()" class="w-full py-5 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest">Salvar Alterações</button>
-            <button onclick="toggleModal('modal-item')" class="w-full text-slate-400 text-xs font-bold uppercase">Cancelar</button>
-        </div>
-    </div>
-
-    <script>
-        // Configurações iniciais solicitadas
-        const DEFAULT_METAS = [
-            { nome: "Musculação", pontos: 5 },
-            { nome: "Cardio (30 min)", pontos: 5 },
-            { nome: "Cardio (20 min)", pontos: 2 },
-            { nome: "Beber 2L de Água", pontos: 5 },
-            { nome: "Consistência (5 dias seguidos)", pontos: 15 },
-            { nome: "Refeição Saudável", pontos: 3 },
-            { nome: "Nova Receita Fit", pontos: 10 },
-            { nome: "Caminhada (40 min)", pontos: 8 },
-            { nome: "Noite de Sono (7h+)", pontos: 5 },
-            { nome: "Dormir até às 10:30 (Fim de semana)", pontos: 10 },
-            { nome: "Ajudar a mãe", pontos: 5 },
-            { nome: "Massagem (15 min)", pontos: 20 },
-            { nome: "Cardio (+18)", pontos: 10 },
-            { nome: "Tomar Creatina", pontos: 3 },
-            { nome: "Comer Frutas", pontos: 3 },
-            { nome: "Tratamento H. pylori", pontos: 3000 },
-            { nome: "Cirurgia do Joelho", pontos: 3000 }
-        ];
-
-        const DEFAULT_LOJA = [
-            { nome: "Conjunto Academia (Até R$40)", preco: 700 },
-            { nome: "Refeição Livre (iFood)", preco: 850 },
-            { nome: "Roupas (Até R$150)", preco: 1050 },
-            { nome: "Conjunto Academia (Até R$200)", preco: 1300 },
-            { nome: "Jantar Especial", preco: 1600 },
-            { nome: "Par de Tênis Novo", preco: 2500 },
-            { nome: "Vale R$500 Shein", preco: 3000 },
-            { nome: "Perfume Importado", preco: 3400 },
-            { nome: "Vale R$1.000 Shein", preco: 6000 }
-        ];
-
-        let state = JSON.parse(localStorage.getItem('vitgym_data_v2')) || {
-            balance: 500, // Começo com 500
-            checkins: [],
-            metas: DEFAULT_METAS,
-            loja: DEFAULT_LOJA
-        };
-
-        function save() { 
-            localStorage.setItem('vitgym_data_v2', JSON.stringify(state)); 
-            render(); 
-        }
-
-        // --- SISTEMA DE ABAS ---
-        function switchTab(tab) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
-            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active-tab', 'text-slate-400'));
-            document.getElementById(`tab-${tab}`).classList.remove('hidden');
-            document.getElementById(`nav-${tab}`).classList.add('active-tab');
-        }
-
-        function toggleModal(id) { document.getElementById(id).classList.toggle('hidden'); }
-
-        // --- SISTEMA ADMIN ---
-        function checkAdmin() {
-            if(document.getElementById('admin-pass').value === '271224') {
-                document.getElementById('admin-login').classList.add('hidden');
-                document.getElementById('admin-panel').classList.remove('hidden');
-                renderAdmin();
-            }
-        }
-        
-        function logoutAdmin() {
-            document.getElementById('admin-login').classList.remove('hidden');
-            document.getElementById('admin-panel').classList.add('hidden');
-            document.getElementById('admin-pass').value = '';
-        }
-
-        // --- OPERAÇÕES ---
-        function openCheckinModal() {
-            const select = document.getElementById('checkin-activity');
-            select.innerHTML = state.metas.map(m => `<option value="${m.nome}">${m.nome} (+${m.pontos} pts)</option>`).join('');
-            toggleModal('modal-checkin');
-        }
-
-        function submitCheckin() {
-            const actName = document.getElementById('checkin-activity').value;
-            const meta = state.metas.find(m => m.nome === actName);
-            
-            // Adição automática
-            state.checkins.unshift({ 
-                id: Date.now(), 
-                activity: actName, 
-                points: meta.pontos, 
-                date: new Date().toLocaleDateString('pt-BR', {day: '2-digit', month: 'long'}) 
-            });
-            state.balance += meta.pontos;
-            
-            toggleModal('modal-checkin');
-            save();
-        }
-
-        function deleteCheckin(id) {
-            const item = state.checkins.find(c => c.id === id);
-            state.balance -= item.points;
-            state.checkins = state.checkins.filter(c => c.id !== id);
-            save();
-        }
-
-        // --- GESTÃO ADMIN (ADICIONAR/EDITAR) ---
-        function openItemModal(type, index = -1) {
-            const isEdit = index > -1;
-            document.getElementById('edit-type').value = type;
-            document.getElementById('edit-index').value = index;
-            document.getElementById('item-modal-title').innerText = isEdit ? 'Editar Item' : 'Novo Item';
-            document.getElementById('item-value-label').innerText = type === 'meta' ? 'Pontos' : 'Preço (PTS)';
-            
-            if(isEdit) {
-                const item = type === 'meta' ? state.metas[index] : state.loja[index];
-                document.getElementById('item-name').value = item.nome;
-                document.getElementById('item-value').value = type === 'meta' ? item.pontos : item.preco;
-            } else {
-                document.getElementById('item-name').value = '';
-                document.getElementById('item-value').value = '';
-            }
-            
-            toggleModal('modal-item');
-        }
-
-        function saveItem() {
-            const type = document.getElementById('edit-type').value;
-            const index = parseInt(document.getElementById('edit-index').value);
-            const name = document.getElementById('item-name').value;
-            const value = parseInt(document.getElementById('item-value').value);
-
-            if(!name || !value) return;
-
-            if(type === 'meta') {
-                const metaObj = { nome: name, pontos: value };
-                if(index > -1) state.metas[index] = metaObj;
-                else state.metas.push(metaObj);
-            } else {
-                const shopObj = { nome: name, preco: value };
-                if(index > -1) state.loja[index] = shopObj;
-                else state.loja.push(shopObj);
-            }
-
-            toggleModal('modal-item');
-            save();
-            renderAdmin();
-        }
-
-        function deleteItem(type, index) {
-            if(type === 'meta') state.metas.splice(index, 1);
-            else state.loja.splice(index, 1);
-            save();
-            renderAdmin();
-        }
-
-        // --- RENDERIZAÇÃO ---
-        function render() {
-            document.getElementById('balance-display').innerText = state.balance;
-            
-            // Feed
-            const feed = document.getElementById('feed-list');
-            if(state.checkins.length === 0) {
-                feed.innerHTML = `<div class="py-10 text-center text-slate-300 text-sm font-medium">Nenhum registro hoje...<br>Clique no + para começar!</div>`;
-            } else {
-                feed.innerHTML = state.checkins.map(c => `
-                    <div class="bg-white p-5 rounded-[2rem] card-shadow relative border border-slate-50">
-                        <div class="flex items-center gap-3">
-                            <div class="w-10 h-10 bg-rose-50 rounded-full flex items-center justify-center text-rose-500">
-                                <i class="fas fa-check"></i>
-                            </div>
-                            <div>
-                                <h3 class="font-bold text-slate-800 leading-tight">${c.activity}</h3>
-                                <p class="text-[9px] font-black text-rose-400 uppercase tracking-widest">${c.date} • +${c.points} PTS</p>
-                            </div>
-                        </div>
-                        <button onclick="deleteCheckin(${c.id})" class="absolute top-6 right-6 text-slate-200 hover:text-red-400 transition-colors"><i class="fas fa-times"></i></button>
+                {/* Adicionar Item na Loja */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                  <h3 className="font-bold flex items-center gap-2">
+                    <Store className="w-4 h-4 text-indigo-500" /> Novo Item na Loja
+                  </h3>
+                  <div className="space-y-3">
+                    <input 
+                      type="text" 
+                      placeholder="Nome do produto (ex: Skincare)" 
+                      className="w-full p-3 bg-slate-50 border rounded-lg text-sm"
+                      value={newItem.name}
+                      onChange={(e) => setNewItem({...newItem, name: e.target.value})}
+                    />
+                    <div className="flex gap-2">
+                      <input 
+                        type="number" 
+                        placeholder="Preço (pontos)" 
+                        className="w-1/3 p-3 bg-slate-50 border rounded-lg text-sm"
+                        value={newItem.price}
+                        onChange={(e) => setNewItem({...newItem, price: e.target.value})}
+                      />
+                      <div className="relative flex-1">
+                         <Camera className="absolute left-3 top-3.5 w-4 h-4 text-slate-400" />
+                         <input 
+                          type="text" 
+                          placeholder="Link da imagem (opcional)" 
+                          className="w-full p-3 pl-9 bg-slate-50 border rounded-lg text-sm"
+                          value={newItem.imageUrl}
+                          onChange={(e) => setNewItem({...newItem, imageUrl: e.target.value})}
+                        />
+                      </div>
                     </div>
-                `).join('');
-            }
-
-            // Metas
-            document.getElementById('metas-list').innerHTML = state.metas.map(m => `
-                <div class="bg-white p-4 rounded-2xl flex justify-between items-center card-shadow border-l-4 border-rose-400">
-                    <span class="font-bold text-xs text-slate-700">${m.nome}</span>
-                    <span class="bg-rose-50 text-rose-600 font-black text-[10px] px-3 py-1 rounded-full">+${m.pontos} PTS</span>
-                </div>
-            `).join('');
-
-            // Loja
-            document.getElementById('shop-list').innerHTML = state.loja.map(i => {
-                const canBuy = state.balance >= i.preco;
-                return `
-                <div class="bg-white p-5 rounded-[2rem] border border-slate-100 card-shadow flex justify-between items-center ${!canBuy ? 'opacity-60' : ''}">
-                    <div class="flex-1">
-                        <h4 class="text-xs font-black text-slate-800 uppercase tracking-tight">${i.nome}</h4>
-                        <p class="text-rose-600 font-extrabold text-[10px] mt-1 italic">${i.preco} PONTOS</p>
-                    </div>
-                    <button class="${canBuy ? 'bg-slate-900 shadow-lg' : 'bg-slate-200 cursor-not-allowed'} text-white text-[10px] font-black px-4 py-2 rounded-xl uppercase">
-                        ${canBuy ? 'Resgatar' : 'Bloqueado'}
+                    <button 
+                      onClick={addShopItem}
+                      className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2"
+                    >
+                      <Plus className="w-5 h-5" /> Adicionar à Loja
                     </button>
-                </div>
-            `}).join('');
-        }
+                  </div>
 
-        function renderAdmin() {
-            document.getElementById('admin-metas-list').innerHTML = state.metas.map((m, idx) => `
-                <div class="bg-white p-3 rounded-xl flex justify-between items-center border border-slate-100">
-                    <span class="text-xs font-bold">${m.nome} (${m.pontos})</span>
-                    <div class="flex gap-2">
-                        <button onclick="openItemModal('meta', ${idx})" class="text-blue-500 text-xs"><i class="fas fa-edit"></i></button>
-                        <button onclick="deleteItem('meta', ${idx})" class="text-red-400 text-xs"><i class="fas fa-trash"></i></button>
+                  <div className="pt-4 border-t border-slate-100">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase mb-3">Itens Atuais</h4>
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                      {shopItems.map(item => (
+                        <div key={item.id} className="flex items-center justify-between bg-slate-50 p-2 rounded-lg">
+                          <div className="flex items-center gap-2">
+                             <img src={item.imageUrl} className="w-8 h-8 rounded object-cover border" />
+                             <span className="text-sm font-medium">{item.name}</span>
+                          </div>
+                          <button onClick={() => deleteItem(item.id, 'shopItems')} className="text-rose-500 p-1">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
+                  </div>
                 </div>
-            `).join('');
 
-            document.getElementById('admin-shop-list').innerHTML = state.loja.map((i, idx) => `
-                <div class="bg-white p-3 rounded-xl flex justify-between items-center border border-slate-100">
-                    <span class="text-xs font-bold">${i.nome} (${i.preco})</span>
-                    <div class="flex gap-2">
-                        <button onclick="openItemModal('shop', ${idx})" class="text-blue-500 text-xs"><i class="fas fa-edit"></i></button>
-                        <button onclick="deleteItem('shop', ${idx})" class="text-red-400 text-xs"><i class="fas fa-trash"></i></button>
+                {/* Adicionar Missão */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                  <h3 className="font-bold flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-500" /> Nova Missão
+                  </h3>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="Ex: Beber 2L de água" 
+                      className="flex-1 p-3 bg-slate-50 border rounded-lg text-sm"
+                      value={newTask.title}
+                      onChange={(e) => setNewTask({...newTask, title: e.target.value})}
+                    />
+                    <input 
+                      type="number" 
+                      placeholder="Pontos" 
+                      className="w-20 p-3 bg-slate-50 border rounded-lg text-sm"
+                      value={newTask.points}
+                      onChange={(e) => setNewTask({...newTask, points: e.target.value})}
+                    />
+                  </div>
+                  <button 
+                    onClick={addTask}
+                    className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2"
+                  >
+                    <Plus className="w-5 h-5" /> Adicionar Missão
+                  </button>
+
+                  <div className="pt-4 border-t border-slate-100">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase mb-3">Missões Ativas</h4>
+                    <div className="space-y-2">
+                      {tasks.map(task => (
+                        <div key={task.id} className="flex items-center justify-between bg-slate-50 p-2 rounded-lg">
+                          <span className="text-sm font-medium">{task.title} (+{task.points})</span>
+                          <button onClick={() => deleteItem(task.id, 'tasks')} className="text-rose-500 p-1">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
+                  </div>
                 </div>
-            `).join('');
-        }
+              </div>
+            )}
+          </div>
+        )}
+      </main>
 
-        function resetApp() { 
-            if(confirm('Isso vai apagar TUDO (pontos, metas customizadas e histórico). Confirmar?')) {
-                localStorage.clear(); 
-                location.reload(); 
-            }
-        }
+      {/* Navegação Inferior Tab Bar */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-6 py-3 flex justify-around items-center z-20">
+        <button 
+          onClick={() => setView('loja')}
+          className={`flex flex-col items-center gap-1 ${view === 'loja' ? 'text-indigo-600' : 'text-slate-400'}`}
+        >
+          <Store className="w-6 h-6" />
+          <span className="text-[10px] font-bold uppercase tracking-wider">Loja</span>
+        </button>
+        <button 
+          onClick={() => setView('perfil')}
+          className={`flex flex-col items-center gap-1 ${view === 'perfil' ? 'text-indigo-600' : 'text-slate-400'}`}
+        >
+          <CheckCircle className="w-6 h-6" />
+          <span className="text-[10px] font-bold uppercase tracking-wider">Missões</span>
+        </button>
+        <button 
+          onClick={() => setView('admin')}
+          className={`flex flex-col items-center gap-1 ${view === 'admin' ? 'text-indigo-600' : 'text-slate-400'}`}
+        >
+          <Settings className="w-6 h-6" />
+          <span className="text-[10px] font-bold uppercase tracking-wider">Admin</span>
+        </button>
+      </nav>
+    </div>
+  );
+};
 
-        // Iniciar
-        render();
-    </script>
-</body>
-</html>
+export default App;
